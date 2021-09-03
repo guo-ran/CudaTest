@@ -1,24 +1,22 @@
 /*
 
-/usr/local/cuda-11.4/bin/nvcc test_nccl.cu -I /usr/local/nccl_2.10.3-1+cuda11.4_x86_64/include/ -L /usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/ -lnccl 
-export LD_LIBRARY_PATH=/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/ 
+/usr/local/cuda-11.4/bin/nvcc test_nccl.cu -I
+/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/include/ -L
+/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/ -lnccl export
+LD_LIBRARY_PATH=/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/
 
-/usr/local/cuda-11.4/bin/nvcc test_nccl.cu -I /usr/local/nccl_2.10.3-1+cuda11.4_x86_64/include/ -L /usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/ -lnccl_static
+/usr/local/cuda-11.4/bin/nvcc test_nccl.cu -I
+/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/include/ -L
+/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/ -lnccl_static
 
  */
 
+#include "cuda_util.h"
 #include <cuda.h>
 #include <cuda_fp16.h>
-#include <nccl.h>
 #include <iostream>
+#include <nccl.h>
 #include <vector>
-
-void Check(cudaError_t err) {
-  if (err != cudaSuccess) {
-    std::cerr << cudaGetErrorString(err) << std::endl;
-    exit(1);
-  }
-}
 
 void Check(ncclResult_t err) {
   if (err != ncclSuccess) {
