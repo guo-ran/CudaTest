@@ -59,12 +59,40 @@ nccl2.10.3支持了bfloat16数据类型，在我更新了nccl 版本后，发现
 
 本测试文件是构造的2卡的混合数据类型的allreduce，一个float类型，一个float16类型，nccl版本2.10.3在A100上动态链接会报`an illegal memory access was encountered`错误，nccl版本2.9.8没问题，向nccl官方提了issue，已fix，等待下一个版本发布。
 
+#### test_copy_benchmark
+编译命令：
+```
+A100 sm_80, 3090 sm86, 2080Ti sm75, V100 sm70
+/usr/local/cuda-11.4/bin/nvcc test_copy_benchmark.cu -arch=sm_80 -O3 -std=c++11
+```
+运行ncu命令：
+```
+cuda 11.2:
+sudo /usr/local/cuda-11.2/bin/ncu --section ".*" -f ./a.out
+```
 
+cuda 11.4命令发生了变化，直接跑上述命令会报错：
 
+```
+==ERROR== Option '--section .*' did not match any section.
+```
 
+查文档，将`--section .*`改成`--section "regex:.*"` 后，会报错：
 
+```
+==ERROR== Failed to access the following 8 metrics: nvlrx__bytes.sum, nvlrx__bytes.sum.pct_of_peak_sustained_elapsed, nvlrx__bytes_data_protocol.sum, nvlrx__bytes_data_user.sum, nvltx__bytes.sum, nvltx__bytes.sum.pct_of_peak_sustained_elapsed, nvltx__bytes_data_protocol.sum, nvltx__bytes_data_user.sum
+```
 
+原因是这台机器没有nvlink，需要改成如下命令：
 
+```
+cuda 11.4:
+/usr/local/cuda-11.4/bin/ncu --section regex:'^(?!Nvlink)' -f ./a.out
+```
+
+背景：  
+
+使用CopyKernel测试不同数据大小、不同pack_size下，能达到的显存带宽上限，作为Cuda Kernel优化的依据。详见[Copy-Benchmark](doc/copy_benchmark.md)
 
 
 
