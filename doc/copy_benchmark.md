@@ -1,16 +1,10 @@
 ### CUDA优化实践之尽可能使用向量化内存操作
 
-Nvidia性能优化的博客[Increase Performance with Vectorized Memory Access](https://developer.nvidia.com/blog/cuda-pro-tip-increase-performance-with-vectorized-memory-access/ )中提到可以通过向量化内存操作来提高Cuda Kernel性能，大多数的Cuda Kernel都是带宽受限的，使用向量化内存操作可以减少总的指令数，减少延迟，提高带宽利用率。文中比较了不同ArraySize下使用vector2、vector4向量化访存相对scalar访存的性能，发现向量化读写内存在任何情况下都会相比普通读写有性能提升。
+Nvidia性能优化的博客[Increase Performance with Vectorized Memory Access](https://developer.nvidia.com/blog/cuda-pro-tip-increase-performance-with-vectorized-memory-access/ )中提到可以通过向量化内存操作来提高CUDA Kernel性能，很多CUDA Kernel都是带宽受限的，使用向量化内存操作可以减少总的指令数，减少延迟，提高带宽利用率。文中比较了不同数据量下使用vector2、vector4向量化访存相对scalar访存的性能，发现向量化读写内存在任何情况下都会相比普通读写有性能提升。这个文章发布于2013年，几年来，GPU硬件有了很大提升，我们在较新的硬件上做了实验来评估向量化内存操作对CUDA Kernel性能的影响。我们测试了随着数据量从1MB-1024MB变化，1Byte-16Byte的内存读写粒度的性能表现。
 
-几年过去了，我们在最新的硬件上做了实验来评估向量化内存操作对Cuda Kernel性能的提升，我们分别在GeForce RTX 2080 Ti ，GeForce RTX 3090、Tesla V100-SXM2-32GB及NVIDIA A100-PCIE-40GB上进行了测试，测试Array Size从1MB-1024MB，读写内存单位从1Byte-16Byte下，性能的变化。
-
-#### 实验：
-
-下图中横轴代表数据量大小从1MB-1024MB变化，纵轴代表Copy操作达到的有效显存读写带宽(越高越好)，每条线代表从1Byte-16Byte的global memory访存单位，可以看到总体的趋势是随着数据量增大，达到的有效显存读写带宽越高，当数据量到一定范围后，达到的有效显存读写带宽趋于稳定，接近设备理论显存带宽。global memory访存单位越大，达到的有效显存读写带宽越高。
-
+下图中横轴代表数据量大小，纵轴代表Copy操作达到的有效显存读写带宽(越高代表性能越好)，每条线代表从1Byte-16Byte的读写
 
 NVIDIA A100-PCIE-40GB
-
 
 |       | 1B     | 2B     | 4B      | 8B      | 16B     |
 | ----- | ------ | ------ | ------- | ------- | ------- |
@@ -28,12 +22,8 @@ NVIDIA A100-PCIE-40GB
 
 ![image-20211013152912717](image/image-a100.png)
 
-由图上可以看出对于NVIDIA A100-PCIE-40GB显卡，Global Memory访存单位为8Byte和16Byte的性能接近，访存单位为4Byte与8Byte有显著性能差距，2Byte相对于4Byte也有显著性能差距。说明对于常见的数据操作类型为float类型或half类型的CUDA Kernel，如果不能将几个元素的Global Memory访存操作pack到一起读写，而是一个元素一个元素操作，就一定会有性能问题。
-
-
 
 Tesla V100-SXM2-32GB
-
 
 |       | 1B     | 2B     | 4B      | 8B      | 16B     |
 | ----- | ------ | ------ | ------- | ------- | ------- |
@@ -51,12 +41,7 @@ Tesla V100-SXM2-32GB
 
 ![image-20211013152942847](image/image-v100.png)
 
-由图上可以看出对于Tesla V100-SXM2-32GB显卡，Global Memory访存单位为4Byte、8Byte和16Byte的性能接近，访存单位为2Byte相对于4Byte有显著性能差距。说明对于常见的数据操作类型为float类型的Kernel，不把多个元素pack到一起读写，一个个操作，不会有明显的性能问题。而对于half类型，如果不能将几个元素的Global Memory访存操作pack到一起读写，而是一个元素一个元素操作，就一定会有性能问题。
-
-
-
 NVIDIA GeForce RTX 3090
-
 
 
 |       | 1B     | 2B     | 4B     | 8B     | 16B    |
@@ -77,7 +62,6 @@ NVIDIA GeForce RTX 3090
 ![image-20211013152951303](image/image-3090.png)
 
 
-
 GeForce RTX 2080 Ti 
 
 |       | 1B     | 2B     | 4B     | 8B     | 16B    |
@@ -94,53 +78,9 @@ GeForce RTX 2080 Ti
 | 512M  | 387.76 | 689.87 | 852.74 | 840.73 | 841.66 |
 | 1024M | 388.13 | 691.14 | 854.78 | 844.73 | 843.99 |
 
-
 ![image-20211013154007210](image/image-2080Ti.png)
 
-在由图上可以看出对于NVIDIA GeForce RTX 3090和GeForce RTX 2080 Ti 显卡，Global Memory访存单位为4Byte、8Byte和16Byte的性能几乎重合，访存单位为2Byte相对于4Byte有显著性能差距。说明对于常见的数据操作类型为float类型的Kernel，不需要把多个元素pack到一起读写。而对于half类型，如果不能将几个元素的Global Memory访存操作pack到一起读写，而是一个元素一个元素操作，就一定会有性能问题。
-
-
-#### 实验结论：
-
-在Tesla V100及以下的显卡上，对于float类型数据的访存操作，不需要把多个元素合并到一起向量化读写，但是half类型一定需要合并到4Byte及以上向量化访存，才能更好利用带宽资源。
-
-在A100显卡以后，4Byte大小的float类型数据的访存操作也需要合并到8Byte及以上向量化访存才能更好利用带宽资源。
-
-
-#### 如何处理：
-
-在A100显卡以后，需要考虑float数据类型的向量化访存操作，half类型合并到half2访存仍无法最好利用带宽，应该合并到8Byte以上。
-
-对于纯数据移动类操作，可以直接合并读写。
-
-```
-    using T = typename std::aligned_storage<N, N>::type;
-    const T* src = reinterpret_cast<const T*>(in);
-    T* dst = reinterpret_cast<T*>(out);
-    dst[i] = src[i];
-```
-
-对于有计算的操作可以用union 转换数据，借助Pack结构，将数据读到Pack.storage中，使用pack.elem逐个参与计算
-
-```
-template<typename T, int N>
-struct GetPackType {
-  using type = typename std::aligned_storage<N * sizeof(T), N * sizeof(T)>::type;
-};
-
-template<typename T, int N>
-using PackType = typename GetPackType<T, N>::type;
-
-template<typename T, int N>
-union Pack {
-  static_assert(sizeof(PackType<T, N>) == sizeof(T) * N, "");
-  __device__ Pack() {
-    // do nothing
-  }
-  PackType<T, N> storage;
-  T elem[N];
-};
-```
+由上图可以看出，对于NVIDIA GeForce RTX 2080 Ti 和GeForce RTX 3090 GPU，4Byte以上的访存粒度对性能提升不显著，4Byte、8Byte和16Byte大小的访存对带宽利用效果接近，2Byte相对4Byte有明显差距。对于Tesla V100-SXM2-32GB GPU，4Byte、8Byte和16Byte大小的访存性能有一点差别，2Byte的相对4Byte有明显差距。对于NVIDIA A100-PCIE-40GB GPU，4Byte相对8Byte和16Byte粒度的访存性能也有明显差别，2Byte相对4Byte也有明显差距。也就是说，对于Tesla V100及以下的GPU，不对float数据类型使用向量化操作影响有限，对half类型需要使用向量化操作。对于A100后的GPU，不仅需要对half数据类型使用向量化操作，对float数据类型也应该使用向量化操作，否则无法充分利用带宽资源，可能会有性能问题。使用向量化内存操作的方法是，对于数据移动类操作，可以分析当前操作有没有机会合并到更大的数据类型上去，再进行访存操作，只有当指针地址是对齐到更大数据类型的，并且数据大小可以被更大数据类型整除的情况，才能合并到更大类型。对于有计算的操作，可以用union结构，在数据加载和存储时使用更大的数据类型访存，在计算时访问元素实际的数据类型。
 
 
 
