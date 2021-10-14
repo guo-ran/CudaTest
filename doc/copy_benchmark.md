@@ -1,18 +1,12 @@
-## Copy Benchmark
+### CUDA优化实践之尽可能使用向量化内存操作
 
+Nvidia性能优化的博客[Increase Performance with Vectorized Memory Access](https://developer.nvidia.com/blog/cuda-pro-tip-increase-performance-with-vectorized-memory-access/ )中提到可以通过向量化内存操作来提高Cuda Kernel性能，大多数的Cuda Kernel都是带宽受限的，使用向量化内存操作可以减少总的指令数，减少延迟，提高带宽利用率。文中比较了不同ArraySize下使用vector2、vector4向量化访存相对scalar访存的性能，发现向量化读写内存在任何情况下都会相比普通读写有性能提升。
 
-一般来说性能优化的目标是在对设备某种资源充分利用且对该资源需求无法降低情况下，达到最大性能。CUDA编程中我们常接触到的两种资源是计算资源和显存带宽资源，对于计算资源需求较高的Op如Conv、Matmul等都是用Cudnn、Cublas实现的，对这些Kernel一般情况下我们不会去优化，我们往往去优化受限于显存带宽的Kernel。对于显存带宽资源来说，充分利用指的是Kernel的有效显存读写带宽达到了设备显存带宽的上限。
+几年过去了，我们在最新的硬件上做了实验来评估向量化内存操作对Cuda Kernel性能的提升，我们分别在GeForce RTX 2080 Ti ，GeForce RTX 3090、Tesla V100-SXM2-32GB及NVIDIA A100-PCIE-40GB上进行了测试，测试Array Size从1MB-1024MB，读写内存单位从1Byte-16Byte下，性能的变化。
 
-Cuda Kernel操作的数据量的大小、Global Memory访存的单位都会对能达到的有效显存读写带宽有影响，表现在Cuda Kernel的性能上。
-
-
-
-本文针对NVIDIA A100-PCIE-40GB、Tesla V100-SXM2-32GB、NVIDIA GeForce RTX 3090、GeForce RTX 2080 Ti GPU上评估不同数据量大小、global memory访存的单位对Copy操作能达到的有效显存读写带宽的影响。
-
-
+#### 实验：
 
 下图中横轴代表数据量大小从1MB-1024MB变化，纵轴代表Copy操作达到的有效显存读写带宽(越高越好)，每条线代表从1Byte-16Byte的global memory访存单位，可以看到总体的趋势是随着数据量增大，达到的有效显存读写带宽越高，当数据量到一定范围后，达到的有效显存读写带宽趋于稳定，接近设备理论显存带宽。global memory访存单位越大，达到的有效显存读写带宽越高。
-
 
 
 NVIDIA A100-PCIE-40GB
@@ -106,12 +100,47 @@ GeForce RTX 2080 Ti
 在由图上可以看出对于NVIDIA GeForce RTX 3090和GeForce RTX 2080 Ti 显卡，Global Memory访存单位为4Byte、8Byte和16Byte的性能几乎重合，访存单位为2Byte相对于4Byte有显著性能差距。说明对于常见的数据操作类型为float类型的Kernel，不需要把多个元素pack到一起读写。而对于half类型，如果不能将几个元素的Global Memory访存操作pack到一起读写，而是一个元素一个元素操作，就一定会有性能问题。
 
 
+#### 实验结论：
 
-### 结论：
+在Tesla V100及以下的显卡上，对于float类型数据的访存操作，不需要把多个元素合并到一起向量化读写，但是half类型一定需要合并到4Byte及以上向量化访存，才能更好利用带宽资源。
 
-在Tesla V100及以下的显卡上，对于float类型数据的访存操作，不需要把多个元素pack到一起读写，但是half类型一定需要pack到4Byte及以上，才能更好利用带宽资源。
+在A100显卡以后，4Byte大小的float类型数据的访存操作也需要合并到8Byte及以上向量化访存才能更好利用带宽资源。
 
-A100显卡以后，4Byte大小的float类型数据的访存操作也需要pack到8Byte及以上才能更好利用带宽资源。
+
+#### 如何处理：
+
+在A100显卡以后，需要考虑float数据类型的向量化访存操作，half类型合并到half2访存仍无法最好利用带宽，应该合并到8Byte以上。
+
+对于纯数据移动类操作，可以直接合并读写。
+
+```
+    using T = typename std::aligned_storage<N, N>::type;
+    const T* src = reinterpret_cast<const T*>(in);
+    T* dst = reinterpret_cast<T*>(out);
+    dst[i] = src[i];
+```
+
+对于有计算的操作可以用union 转换数据，借助Pack结构，将数据读到Pack.storage中，使用pack.elem逐个参与计算
+
+```
+template<typename T, int N>
+struct GetPackType {
+  using type = typename std::aligned_storage<N * sizeof(T), N * sizeof(T)>::type;
+};
+
+template<typename T, int N>
+using PackType = typename GetPackType<T, N>::type;
+
+template<typename T, int N>
+union Pack {
+  static_assert(sizeof(PackType<T, N>) == sizeof(T) * N, "");
+  __device__ Pack() {
+    // do nothing
+  }
+  PackType<T, N> storage;
+  T elem[N];
+};
+```
 
 
 
