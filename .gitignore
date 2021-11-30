@@ -2,3 +2,4 @@
 *.qdrep
 *.sqlite
 *.DS_Store
+*.bin

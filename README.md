@@ -5,3 +5,5 @@
 2、[test_nccl](./doc.md#test_nccl)
 
 3、[copy_benchmark](./doc.md#test_copy_benchmark)
+
+4、[softmax](./doc.md#test_softmax)

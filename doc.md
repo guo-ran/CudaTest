@@ -95,8 +95,9 @@ cuda 11.4:
 使用CopyKernel测试不同数据大小、不同pack_size下，能达到的显存带宽上限，作为Cuda Kernel优化的依据。详见[Copy-Benchmark](doc/copy_benchmark.md)
 
 
+#### test_softmax
 
-
+cudnn 8.3 的softmax速度快了不少，基于cudnn8.3做了和oneflow性能测试比较，详见[Softmax](doc/softmax.md)
 
 
 
