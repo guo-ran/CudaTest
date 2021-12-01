@@ -40,6 +40,6 @@ int main(int argc, char **argv) {
   Check(cudaFree(x));
   Check(cudaFree(y));
 
-  cudaDeviceSynchronize();
+  Check(cudaDeviceSynchronize());
   return 0;
 }

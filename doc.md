@@ -99,6 +99,11 @@ cuda 11.4:
 
 cudnn 8.3 的softmax速度快了不少，基于cudnn8.3做了和oneflow性能测试比较，详见[Softmax](doc/softmax.md)
 
+#### test_layer_norm
+
+基于apex做了和oneflow性能测试比较，详见[LayerNorm](doc/layer_norm.md)
+
+
 
 
 
