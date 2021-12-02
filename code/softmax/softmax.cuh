@@ -485,7 +485,7 @@ __global__ void SoftmaxBlockSMemImpl(LOAD load, STORE store, const int64_t rows,
   const int tid = threadIdx.x;
   assert(cols % pack_size == 0);
   const int num_packs = cols / pack_size;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     ComputeType thread_max = -Inf<ComputeType>();
     for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
       ComputeType pack[pack_size];
@@ -636,7 +636,7 @@ __global__ void SoftmaxBlockUncachedImpl(LOAD load, STORE store, const int64_t r
   const int tid = threadIdx.x;
   assert(cols % pack_size == 0);
   const int num_packs = cols / pack_size;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     ComputeType thread_max = -Inf<ComputeType>();
     for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
       ComputeType pack[pack_size];
@@ -1017,7 +1017,7 @@ __global__ void SoftmaxGradBlockSMemImpl(LOAD_Y load_y, LOAD_DY load_dy, STORE s
   const int tid = threadIdx.x;
   assert(cols % pack_size == 0);
   const int num_packs = cols / pack_size;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     ComputeType thread_sum = 0;
     for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
       ComputeType y_pack[pack_size];
@@ -1181,7 +1181,7 @@ __global__ void SoftmaxGradBlockUncachedImpl(LOAD_Y load_y, LOAD_DY load_dy, STO
   const int tid = threadIdx.x;
   assert(cols % pack_size == 0);
   const int num_packs = cols / pack_size;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     ComputeType thread_sum = 0;
     for (int pack_id = tid; pack_id < num_packs; pack_id += block_size) {
       ComputeType y_pack[pack_size];
