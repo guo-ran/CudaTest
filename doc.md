@@ -103,8 +103,8 @@ cudnn 8.3 的softmax速度快了不少，基于cudnn8.3做了和oneflow性能测
 
 基于apex做了和oneflow性能测试比较，详见[LayerNorm](doc/layer_norm.md)
 
-#### cuda 11.3开始的bug or feature?
-
+#### UncoalescedAccess
+cuda 11.3开始的bug or feature?
 做测试发现cuda11.3开始的nvcc可能会把PackType的读写拆成多个指令，导致线程间的Uncoalesced global access。
 最小复现代码在[test_nvcc.cu](./test_nvcc.cu)
 CopyKernel0和CopyKernel1唯一的区别在row的循环是int还是int64_t，如果使用cuda11.3开始的nvcc编译，CopyKernel0是正常的一次Load 64 一次Store 64，CopyKernel1是一次Load 64，两次Store 32，产生了Uncoalesced global access。
