@@ -668,78 +668,82 @@ void HostLayerNormGradient(const V *dout, const U *mean, const U *invvar,
       dout, input, n1, n2, mean, invvar, U(epsilon), gamma, grad_input);
 }
 
+template <typename T, typename U>
 void forward(int num_instances, int norm_size) {
   std::cout << "num_instances " << num_instances << " norm_size " << norm_size
             << std::endl;
   int elem_cnt = num_instances * norm_size;
-  half *x_ptr;
-  half *y_ptr;
-  float *mean_ptr;
-  float *inv_variance_ptr;
-  half *gamma_ptr;
-  half *beta_ptr;
+  T *x_ptr;
+  T *y_ptr;
+  U *mean_ptr;
+  U *inv_variance_ptr;
+  T *gamma_ptr;
+  T *beta_ptr;
   double epsilon = 1e-5;
-  cudaMalloc(&x_ptr, elem_cnt * sizeof(half));
-  cudaMalloc(&y_ptr, elem_cnt * sizeof(half));
-  cudaMalloc(&mean_ptr, num_instances * sizeof(float));
-  cudaMalloc(&inv_variance_ptr, num_instances * sizeof(float));
-  cudaMalloc(&gamma_ptr, norm_size * sizeof(half));
-  cudaMalloc(&beta_ptr, norm_size * sizeof(half));
-  half *x_host;
-  cudaMallocHost(&x_host, elem_cnt * sizeof(half));
+  cudaMalloc(&x_ptr, elem_cnt * sizeof(T));
+  cudaMalloc(&y_ptr, elem_cnt * sizeof(T));
+  cudaMalloc(&mean_ptr, num_instances * sizeof(U));
+  cudaMalloc(&inv_variance_ptr, num_instances * sizeof(U));
+  cudaMalloc(&gamma_ptr, norm_size * sizeof(T));
+  cudaMalloc(&beta_ptr, norm_size * sizeof(T));
+  T *x_host;
+  cudaMallocHost(&x_host, elem_cnt * sizeof(T));
   std::ifstream x_is;
   x_is.open("data.bin");
-  x_is.read(reinterpret_cast<char *>(x_host), elem_cnt * sizeof(half));
+  x_is.read(reinterpret_cast<char *>(x_host), elem_cnt * sizeof(T));
   x_is.close();
-  cudaMemcpy(x_ptr, x_host, elem_cnt * sizeof(half), cudaMemcpyDefault);
-  cudaMemcpy(gamma_ptr, x_host, norm_size * sizeof(half), cudaMemcpyDefault);
-  cudaMemcpy(beta_ptr, x_host, norm_size * sizeof(half), cudaMemcpyDefault);
-  HostApplyLayerNorm<half, float, half>(y_ptr, mean_ptr, inv_variance_ptr,
-                                        x_ptr, num_instances, norm_size,
-                                        epsilon, gamma_ptr, beta_ptr);
+  cudaMemcpy(x_ptr, x_host, elem_cnt * sizeof(T), cudaMemcpyDefault);
+  cudaMemcpy(gamma_ptr, x_host, norm_size * sizeof(T), cudaMemcpyDefault);
+  cudaMemcpy(beta_ptr, x_host, norm_size * sizeof(T), cudaMemcpyDefault);
+  HostApplyLayerNorm<T, U, T>(y_ptr, mean_ptr, inv_variance_ptr, x_ptr,
+                              num_instances, norm_size, epsilon, gamma_ptr,
+                              beta_ptr);
   cudaDeviceSynchronize();
 }
 
+template <typename T, typename U>
 void backward(int num_instances, int norm_size) {
   std::cout << "num_instances " << num_instances << " norm_size " << norm_size
             << std::endl;
   int elem_cnt = num_instances * norm_size;
-  half *x_ptr;
-  half *dy_ptr;
-  half *dx_ptr;
-  float *mean_ptr;
-  float *inv_variance_ptr;
-  half *gamma_ptr;
-  half *dgamma_ptr;
-  half *dbeta_ptr;
+  T *x_ptr;
+  T *dy_ptr;
+  T *dx_ptr;
+  U *mean_ptr;
+  U *inv_variance_ptr;
+  T *gamma_ptr;
+  T *dgamma_ptr;
+  T *dbeta_ptr;
   double epsilon = 1e-5;
-  cudaMalloc(&x_ptr, elem_cnt * sizeof(half));
-  cudaMalloc(&dy_ptr, elem_cnt * sizeof(half));
-  cudaMalloc(&dx_ptr, elem_cnt * sizeof(half));
-  cudaMalloc(&mean_ptr, num_instances * sizeof(float));
-  cudaMalloc(&inv_variance_ptr, num_instances * sizeof(float));
-  cudaMalloc(&gamma_ptr, norm_size * sizeof(half));
-  cudaMalloc(&dgamma_ptr, norm_size * sizeof(half));
-  cudaMalloc(&dbeta_ptr, norm_size * sizeof(half));
-  half *x_host;
-  cudaMallocHost(&x_host, elem_cnt * sizeof(half));
+  cudaMalloc(&x_ptr, elem_cnt * sizeof(T));
+  cudaMalloc(&dy_ptr, elem_cnt * sizeof(T));
+  cudaMalloc(&dx_ptr, elem_cnt * sizeof(T));
+  cudaMalloc(&mean_ptr, num_instances * sizeof(U));
+  cudaMalloc(&inv_variance_ptr, num_instances * sizeof(U));
+  cudaMalloc(&gamma_ptr, norm_size * sizeof(T));
+  cudaMalloc(&dgamma_ptr, norm_size * sizeof(T));
+  cudaMalloc(&dbeta_ptr, norm_size * sizeof(T));
+  T *x_host;
+  cudaMallocHost(&x_host, elem_cnt * sizeof(T));
   std::ifstream x_is;
   x_is.open("data.bin");
-  x_is.read(reinterpret_cast<char *>(x_host), elem_cnt * sizeof(half));
+  x_is.read(reinterpret_cast<char *>(x_host), elem_cnt * sizeof(T));
   x_is.close();
-  cudaMemcpy(x_ptr, x_host, elem_cnt * sizeof(half), cudaMemcpyDefault);
-  cudaMemcpy(dy_ptr, x_host, elem_cnt * sizeof(half), cudaMemcpyDefault);
+  cudaMemcpy(x_ptr, x_host, elem_cnt * sizeof(T), cudaMemcpyDefault);
+  cudaMemcpy(dy_ptr, x_host, elem_cnt * sizeof(T), cudaMemcpyDefault);
 
-  HostLayerNormGradient<half, float, half>(
-      dy_ptr, mean_ptr, inv_variance_ptr, x_ptr, num_instances, norm_size,
-      gamma_ptr, nullptr, epsilon, dx_ptr, dgamma_ptr, dbeta_ptr);
+  HostLayerNormGradient<T, U, T>(dy_ptr, mean_ptr, inv_variance_ptr, x_ptr,
+                                 num_instances, norm_size, gamma_ptr, nullptr,
+                                 epsilon, dx_ptr, dgamma_ptr, dbeta_ptr);
   cudaDeviceSynchronize();
 }
 
 int main(int argc, char **argv) {
   int num_instances = atoi(argv[1]);
   int norm_size = atoi(argv[2]);
-  // forward(num_instances, norm_size);
-  backward(num_instances, norm_size);
+  forward<float, float>(num_instances, norm_size);
+  forward<half, float>(num_instances, norm_size);
+  backward<float, float>(num_instances, norm_size);
+  backward<half, float>(num_instances, norm_size);
   return 0;
 }

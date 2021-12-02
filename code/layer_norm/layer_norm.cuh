@@ -594,7 +594,7 @@ __global__ void LayerNormBlockSMemImpl(LOAD load, STORE store, const int64_t row
   const int tid = threadIdx.x;
   assert(cols % pack_size == 0);
   const int num_packs = static_cast<int>(cols) / pack_size;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     ComputeType thread_mean = 0;
     ComputeType thread_m2 = 0;
     ComputeType thread_count = 0;
@@ -751,7 +751,7 @@ __global__ void LayerNormBlockUncachedImpl(LOAD load, STORE store, const int64_t
   const int tid = threadIdx.x;
   assert(cols % pack_size == 0);
   const int num_packs = static_cast<int>(cols) / pack_size;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     ComputeType thread_mean = 0;
     ComputeType thread_m2 = 0;
     ComputeType thread_count = 0;
@@ -1135,7 +1135,7 @@ __global__ void LayerNormGradBlockSMemImpl(LOAD_X load_x, LOAD_DY load_dy, STORE
   const int tid = threadIdx.x;
   assert(cols % pack_size == 0);
   const int num_packs = static_cast<int>(cols) / pack_size;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     ComputeType sum_loss1 = 0;
     ComputeType sum_loss2 = 0;
     const ComputeType mean_val = mean[row];
@@ -1298,7 +1298,7 @@ __global__ void LayerNormGradBlockUncachedImpl(LOAD_X load_x, LOAD_DY load_dy, S
   assert(cols % pack_size == 0);
   const int num_packs = static_cast<int>(cols) / pack_size;
   const ComputeType cols_reciprocal = static_cast<ComputeType>(1) / cols;
-  for (int64_t row = blockIdx.x; row < rows; row += gridDim.x) {
+  for (int row = blockIdx.x; row < rows; row += gridDim.x) {
     const ComputeType mean_val = mean[row];
     const ComputeType inv_variance_val = inv_variance[row];
     const ComputeType inv_variance_over_cols = inv_variance_val / cols;

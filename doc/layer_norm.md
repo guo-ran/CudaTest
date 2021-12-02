@@ -1,4 +1,4 @@
-NVIDIA Apex提供了LayerNorm的高性能fuse版本实现，这里用OneFlow和Apex LayerNorm进行对比，Apex版本为：
+NVIDIA Apex提供了LayerNorm的高性能fuse版本实现，这里用OneFlow和Apex LayerNorm进行对比，Apex版本为：commit aa756cec4359aff3df1d9abb68dc6e6e92920e0c Thu Nov 18 23:05:40 2021 -0800
 
 测试用例： num_rows固定为49152, num_cols 由32-32768变化。
 
@@ -27,3 +27,17 @@ NVIDIA Apex提供了LayerNorm的高性能fuse版本实现，这里用OneFlow和A
 后向时cols=2048用warp实现启动不起来，后向判断条件是<=1024
 
 测试代码在:[代码](../code/layer_norm/) 下
+
+
+PyTorch kernel不支持half类型，做了一组float类型的前向对照，**NVIDIA A100-PCIE-40GB** Kernel的执行时间，单位us，越小越好
+下面的PyTorch时间是RowwiseMomentsCUDAKernel+LayerNormForwardCUDAKernel时间
+
+|                                    | 32     | 64     | 128    | 256    | 512    | 1024   | 2048    | 4096 | 8192 | 16384 | 32768 |
+| ---------------------------------- | ------ | ------ | ------ | ------ | ------ | ------ | ------- | ---- | ---- | ----- | ----- |
+| OneFlow                            | 18.59  | 28.64  | 51.78  | 80.19  | 146.46 | 296.70 | 587.90  | 1180 | 2380 | 5360  | 10940 |
+| Apex                               | 219.71 | 222.88 | 224.42 | 255.62 | 297.63 | 409.60 | 728     | 1640 | 3980 | 8070  | 16410 |
+| PyTorch                            | 391.71 | 394.24 | 402.36 | 439.52 | 534.24 | 899.84 | 1366.53 | 2510 | 4780 | 9490  | 19450 |
+| PyTorch RowwiseMomentsCUDAKernel   | 317.60 | 319.49 | 325.02 | 329.82 | 342.88 | 436.06 | 636.61  | 1050 | 1890 | 3600  | 7080  |
+| PyTorch LayerNormForwardCUDAKernel | 74.11  | 74.75  | 77.34  | 109.70 | 191.36 | 365.60 | 729.92  | 1460 | 2890 | 5890  | 12370 |
+|                                    |        |        |        |        |        |        |         |      |      |       |       |
+
