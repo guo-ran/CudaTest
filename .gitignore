@@ -3,3 +3,4 @@
 *.sqlite
 *.DS_Store
 *.bin
+*.ncu-rep
