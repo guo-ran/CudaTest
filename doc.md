@@ -12,7 +12,7 @@
 ```
 背景：
 
-Cuda 11开始，8.0架构开始可以控制驻留L2 cache的数据， (L2 cache](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#L2-cache)
+Cuda 11开始，8.0架构开始可以控制驻留L2 cache的数据， [L2 cache](https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/index.html#L2-cache)
 
 test_l2_cache用于测试设置驻留L2 cache数据的效果。
 

@@ -8,4 +8,4 @@
 
 4、[softmax](./doc.md#test_softmax)
 
-5、[softmax](./doc.md#test_layer_norm)
+5、[layer_norm](./doc.md#test_layer_norm)
