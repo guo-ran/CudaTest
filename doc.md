@@ -109,6 +109,10 @@ cuda 11.3开始的bug or feature?
 最小复现代码在[test_nvcc.cu](./test_nvcc.cu)
 CopyKernel0和CopyKernel1唯一的区别在row的循环是int还是int64_t，如果使用cuda11.3开始的nvcc编译，CopyKernel0是正常的一次Load 64 一次Store 64，CopyKernel1是一次Load 64，两次Store 32，产生了Uncoalesced global access。
 
+#### event统计nccl通信时间 
+
+基于test_nccl的测试脚本增加了event记录时间，编译方式和test_nccl相同，nccl group通信要在ncclGroupStart和ncclGroupEnd外加event统计通信时间。代码在[test_event_record_nccl_time.cu](./test_event_record_nccl_time.cu)
+
 
 
 
