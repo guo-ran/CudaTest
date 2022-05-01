@@ -113,8 +113,13 @@ CopyKernel0和CopyKernel1唯一的区别在row的循环是int还是int64_t，如
 
 基于test_nccl的测试脚本增加了event记录时间，编译方式和test_nccl相同，nccl group通信要在ncclGroupStart和ncclGroupEnd外加event统计通信时间。代码在[test_event_record_nccl_time.cu](./test_event_record_nccl_time.cu)
 
+#### conv_algo_search
 
-
+经常需要写单独例子测某个conv param下的算法性能，准备一个文件实现了conv的forward、data backward、filter backward的algo search和执行。可以方便调整参数设置。代码在[test_conv_algo.cu](./test_conv_algo.cu)
+详细内容待补充。
+```
+/usr/local/cuda/bin/nvcc conv_algo_test.cu -arch=sm_80 -O3 -I/usr/local/cudnn-11.4-linux-x64-v8.2.2.26/cuda/include/ -L/usr/local/cudnn-11.4-linux-x64-v8.2.2.26/cuda/lib64/ -lcudnn
+```
 
 
 

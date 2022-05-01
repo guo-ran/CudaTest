@@ -13,3 +13,5 @@
 6、[cuda 11.3开始的bug or feature?](./doc.md#UncoalescedAccess)
 
 7、[cuda event 统计 nccl通信时间](./doc.md#event统计nccl通信时间 )
+
+8、[conv search algo](./doc.md#conv_algo_search)
