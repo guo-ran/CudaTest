@@ -59,17 +59,17 @@ void ConvForwardSearchAlgo(bool heuristic_search, cudnnHandle_t handle,
                            T *w_ptr, T *y_ptr, void *workspace,
                            size_t workspace_size) {
   int count;
-  cudnnGetConvolutionForwardAlgorithmMaxCount(handle, &count);
+  CudaCheck(cudnnGetConvolutionForwardAlgorithmMaxCount(handle, &count));
   std::vector<cudnnConvolutionFwdAlgoPerf_t> res;
   res.resize(count);
   int ret;
   if (heuristic_search) {
-    cudnnGetConvolutionForwardAlgorithm_v7(handle, x_desc, w_desc, conv_desc,
-                                           y_desc, count, &ret, res.data());
+    CudaCheck(cudnnGetConvolutionForwardAlgorithm_v7(
+        handle, x_desc, w_desc, conv_desc, y_desc, count, &ret, res.data()));
   } else {
-    cudnnFindConvolutionForwardAlgorithmEx(
+    CudaCheck(cudnnFindConvolutionForwardAlgorithmEx(
         handle, x_desc, x_ptr, w_desc, w_ptr, conv_desc, y_desc, y_ptr, count,
-        &ret, res.data(), workspace, workspace_size);
+        &ret, res.data(), workspace, workspace_size));
   }
   std::cout << "search forward algorithm:" << std::endl;
   for (int i = 0; i < ret; ++i) {
@@ -102,17 +102,17 @@ void ConvFilterBackwardSearchAlgo(bool heuristic_search, cudnnHandle_t handle,
                                   T *x_ptr, T *w_ptr, T *y_ptr, void *workspace,
                                   size_t workspace_size) {
   int count;
-  cudnnGetConvolutionBackwardFilterAlgorithmMaxCount(handle, &count);
+  CudaCheck(cudnnGetConvolutionBackwardFilterAlgorithmMaxCount(handle, &count));
   std::vector<cudnnConvolutionBwdFilterAlgoPerf_t> res;
   res.resize(count);
   int ret;
   if (heuristic_search) {
-    cudnnGetConvolutionBackwardFilterAlgorithm_v7(
-        handle, x_desc, y_desc, conv_desc, w_desc, count, &ret, res.data());
+    CudaCheck(cudnnGetConvolutionBackwardFilterAlgorithm_v7(
+        handle, x_desc, y_desc, conv_desc, w_desc, count, &ret, res.data()));
   } else {
-    cudnnFindConvolutionBackwardFilterAlgorithmEx(
+    CudaCheck(cudnnFindConvolutionBackwardFilterAlgorithmEx(
         handle, x_desc, x_ptr, y_desc, y_ptr, conv_desc, w_desc, w_ptr, count,
-        &ret, res.data(), workspace, workspace_size);
+        &ret, res.data(), workspace, workspace_size));
   }
   std::cout << "search backward filter algorithm:" << std::endl;
   for (int i = 0; i < ret; ++i) {
@@ -133,10 +133,10 @@ void ConvFilterBackward(int algo, cudnnHandle_t handle,
                         size_t workspace_size) {
   float zero = 0.0;
   float one = 1.0;
-  cudnnConvolutionBackwardFilter(
+  CudaCheck(cudnnConvolutionBackwardFilter(
       handle, &one, x_desc, x_ptr, y_desc, y_ptr, conv_desc,
       static_cast<cudnnConvolutionBwdFilterAlgo_t>(algo), workspace,
-      workspace_size, &zero, w_desc, w_ptr);
+      workspace_size, &zero, w_desc, w_ptr));
 }
 
 template <typename T>
@@ -148,17 +148,17 @@ void ConvDataBackwardSearchAlgo(bool heuristic_search, cudnnHandle_t handle,
                                 T *x_ptr, T *w_ptr, T *y_ptr, void *workspace,
                                 size_t workspace_size) {
   int count;
-  cudnnGetConvolutionBackwardDataAlgorithmMaxCount(handle, &count);
+  CudaCheck(cudnnGetConvolutionBackwardDataAlgorithmMaxCount(handle, &count));
   std::vector<cudnnConvolutionBwdDataAlgoPerf_t> res;
   res.resize(count);
   int ret;
   if (heuristic_search) {
-    cudnnGetConvolutionBackwardDataAlgorithm_v7(
-        handle, w_desc, y_desc, conv_desc, x_desc, count, &ret, res.data());
+    CudaCheck(cudnnGetConvolutionBackwardDataAlgorithm_v7(
+        handle, w_desc, y_desc, conv_desc, x_desc, count, &ret, res.data()));
   } else {
-    cudnnFindConvolutionBackwardDataAlgorithmEx(
+    CudaCheck(cudnnFindConvolutionBackwardDataAlgorithmEx(
         handle, w_desc, w_ptr, y_desc, y_ptr, conv_desc, x_desc, x_ptr, count,
-        &ret, res.data(), workspace, workspace_size);
+        &ret, res.data(), workspace, workspace_size));
   }
   std::cout << "search backward data algorithm:" << std::endl;
   for (int i = 0; i < ret; ++i) {
@@ -179,10 +179,10 @@ void ConvDataBackward(int algo, cudnnHandle_t handle,
                       size_t workspace_size) {
   float zero = 0.0;
   float one = 1.0;
-  cudnnConvolutionBackwardData(handle, &one, w_desc, w_ptr, y_desc, y_ptr,
-                               conv_desc,
-                               static_cast<cudnnConvolutionBwdDataAlgo_t>(algo),
-                               workspace, workspace_size, &zero, x_desc, x_ptr);
+  CudaCheck(cudnnConvolutionBackwardData(
+      handle, &one, w_desc, w_ptr, y_desc, y_ptr, conv_desc,
+      static_cast<cudnnConvolutionBwdDataAlgo_t>(algo), workspace,
+      workspace_size, &zero, x_desc, x_ptr));
 }
 
 template <typename T> void TestConv() {
@@ -264,6 +264,18 @@ template <typename T> void TestConv() {
                              x, w, y, workspace, workspace_size);
   ConvDataBackward(0, handle, x_desc, y_desc, w_desc, conv_desc, x, w, y,
                    workspace, workspace_size);
+
+  CudaCheck(cudaStreamSynchronize(stream));
+  CudaCheck(cudnnDestroy(handle));
+  CudaCheck(cudaStreamDestroy(stream));
+  CudaCheck(cudnnDestroyConvolutionDescriptor(conv_desc));
+  CudaCheck(cudnnDestroyFilterDescriptor(w_desc));
+  CudaCheck(cudnnDestroyTensorDescriptor(x_desc));
+  CudaCheck(cudnnDestroyTensorDescriptor(y_desc));
+  CudaCheck(cudaFree(x));
+  CudaCheck(cudaFree(w));
+  CudaCheck(cudaFree(y));
+  CudaCheck(cudaFree(workspace));
 }
 
 int main() { TestConv<nv_bfloat16>(); }
