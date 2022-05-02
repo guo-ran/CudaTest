@@ -185,7 +185,7 @@ void ConvDataBackward(int algo, cudnnHandle_t handle,
       workspace_size, &zero, x_desc, x_ptr));
 }
 
-template <typename T> void TestConv() {
+template <typename T> void TestConv(int force_algo, bool heuristic_search) {
   const int n = 32;
   const int x_c = 96;
   const int group = 96;
@@ -250,20 +250,20 @@ template <typename T> void TestConv() {
   CudaCheck(cudnnCreate(&handle));
   CudaCheck(cudnnSetStream(handle, stream));
 
-  ConvForwardSearchAlgo(false, handle, x_desc, y_desc, w_desc, conv_desc, x, w,
-                        y, workspace, workspace_size);
-  ConvForward(0, handle, x_desc, y_desc, w_desc, conv_desc, x, w, y, workspace,
-              workspace_size);
+  ConvForwardSearchAlgo(heuristic_search, handle, x_desc, y_desc, w_desc,
+                        conv_desc, x, w, y, workspace, workspace_size);
+  ConvForward(force_algo, handle, x_desc, y_desc, w_desc, conv_desc, x, w, y,
+              workspace, workspace_size);
 
-  ConvFilterBackwardSearchAlgo(false, handle, x_desc, y_desc, w_desc, conv_desc,
-                               x, w, y, workspace, workspace_size);
-  ConvFilterBackward(0, handle, x_desc, y_desc, w_desc, conv_desc, x, w, y,
-                     workspace, workspace_size);
+  ConvFilterBackwardSearchAlgo(heuristic_search, handle, x_desc, y_desc, w_desc,
+                               conv_desc, x, w, y, workspace, workspace_size);
+  ConvFilterBackward(force_algo, handle, x_desc, y_desc, w_desc, conv_desc, x,
+                     w, y, workspace, workspace_size);
 
-  ConvDataBackwardSearchAlgo(false, handle, x_desc, y_desc, w_desc, conv_desc,
-                             x, w, y, workspace, workspace_size);
-  ConvDataBackward(0, handle, x_desc, y_desc, w_desc, conv_desc, x, w, y,
-                   workspace, workspace_size);
+  ConvDataBackwardSearchAlgo(heuristic_search, handle, x_desc, y_desc, w_desc,
+                             conv_desc, x, w, y, workspace, workspace_size);
+  ConvDataBackward(force_algo, handle, x_desc, y_desc, w_desc, conv_desc, x, w,
+                   y, workspace, workspace_size);
 
   CudaCheck(cudaStreamSynchronize(stream));
   CudaCheck(cudnnDestroy(handle));
@@ -278,4 +278,15 @@ template <typename T> void TestConv() {
   CudaCheck(cudaFree(workspace));
 }
 
-int main() { TestConv<nv_bfloat16>(); }
+int main(int argc, char *argv[]) {
+
+  int force_algo = 0;
+  int heuristic_search = 0;
+  if (argv[1]) {
+    force_algo = std::stoi(argv[1]);
+    if (argv[2]) {
+      heuristic_search = std::stoi(argv[2]);
+    }
+  }
+  TestConv<float>(force_algo, heuristic_search);
+}
