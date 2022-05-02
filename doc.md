@@ -115,11 +115,62 @@ CopyKernel0和CopyKernel1唯一的区别在row的循环是int还是int64_t，如
 
 #### conv_algo_search
 
-经常需要写单独例子测某个conv param下的算法性能，准备一个文件实现了conv的forward、data backward、filter backward的algo search和执行。可以方便调整参数设置。代码在[test_conv_algo.cu](./test_conv_algo.cu)
-详细内容待补充。
+cuDNN Conv的计算通常是在初始化阶段调用SearchAlgo的算法搜索出可用的算法，在执行时传入选择的算法执行。如前向计算，cudnnGetConvolutionForwardAlgorithm_v7(启发式搜索) 和cudnnFindConvolutionForwardAlgorithmEx（试跑搜索）可以搜索出可用算法，cudnnConvolutionForward 执行前向计算。注意cudnnFindConvolutionForwardAlgorithmEx试跑搜索是要把所有的算法都跑一遍统计时间等，所以采用试跑搜索时，用nsys量时间需要注意可能把试跑执行的kernel也统计进去了。
+
+经常会遇到需要单独测量或验证某种参数下convolution的性能，因此准备一个测试文件不用每次重复写了，代码在[test_conv_algo.cu](./test_conv_algo.cu)，包括forward、data backward、filter backward的搜索算法及执行，可以选择启发式搜索或试跑算法，也可以直接选定算法用nsys测量。
+
+目前在TestConv函数中用了一组默认参数，及默认调用了前后向所有的搜索算法和执行算法，模板参数是数据类型，调用搜索算法会将每个算法的time、workspacesize等打印出来，如果测试某一种需要将其他的调用注释掉。
+
+编译：
+
 ```
-/usr/local/cuda/bin/nvcc conv_algo_test.cu -arch=sm_80 -O3 -I/usr/local/cudnn-11.4-linux-x64-v8.2.2.26/cuda/include/ -L/usr/local/cudnn-11.4-linux-x64-v8.2.2.26/cuda/lib64/ -lcudnn
+/usr/local/cuda/bin/nvcc test_conv_algo.cu -arch=sm_80 -O3 -I/usr/local/cudnn-11.4-linux-x64-v8.2.2.26/cuda/include/ -L/usr/local/cudnn-11.4-linux-x64-v8.2.2.26/cuda/lib64/ -lcudnn
 ```
 
+执行前需要export LD_LIBRARY_PATH：
+
+```
+export LD_LIBRARY_PATH=/usr/local/cudnn-11.4-linux-x64-v8.2.2.26/cuda/lib64/:$LD_LIBRARY_PATH
+```
+
+在这个文件默认的参数中，是一个depwise conv，测试发现在cudnn 8.1上，搜索出来最快的算法都很慢。在V100上测试
+
+cudnn 8.1 版本前向最快4.33ms
+
+```
+algo: 0 mathtype: 0 time: 4.33123 memory: 0
+algo: 2 mathtype: 0 time: 6.26957 memory: 78675968
+algo: 1 mathtype: 0 time: 11.1559 memory: 6674560
+algo: 4 mathtype: 0 time: 12.2796 memory: 15345408
+algo: 5 mathtype: 0 time: 34.114 memory: 10913920
+algo: 3 mathtype: 0 time: -1 memory: 0
+algo: 6 mathtype: 0 time: -1 memory: 0
+algo: 7 mathtype: 0 time: -1 memory: 0
+```
+
+cudnn 8.3的话，前向最快0.8ms：
+
+```
+algo: 2 mathtype: 0 time: 0.823712 memory: 0
+algo: 1 mathtype: 0 time: 0.843552 memory: 0
+algo: 0 mathtype: 0 time: 0.84752 memory: 0
+algo: 4 mathtype: 0 time: 12.5845 memory: 15345408
+algo: 5 mathtype: 0 time: 34.9381 memory: 10913920
+algo: 3 mathtype: 0 time: -1 memory: 0
+algo: 6 mathtype: 0 time: -1 memory: 0
+algo: 7 mathtype: 0 time: -1 memory: 0
+```
+
+测试时遇到一个比较疑惑的问题，在8.1版本时，试跑算法统计的是4.33ms，但是看nsys结果是
+
+![image-20220428105347863](doc/image/image-20220428105347863.png)
+
+nsys上统计的Total Time是6.787ms，是96个kernel总时间。为什么这个时间和试跑统计的4.33ms差别这么大呢？
+
+仔细看nsys的图，发现它96个kernel是分在8个stream上的，为了将kernel overlap起来，所以总时间不是简单的叠加，所以虽然每个kernel时间长，但是总的时间线上应该是试跑统计的时间。
+
+<img src="doc/image/image-20220502103038417.png" alt="image-20220502103038417" style="zoom:50%;" />
+
+对于这种情况，应该用cuda Event统计的时间比较准，或者打开qdrep文件测量总的一段时间，不应该只看nsys命令行中统计的时间。
 
 
