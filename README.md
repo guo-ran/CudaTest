@@ -15,3 +15,5 @@
 7、[cuda event 统计 nccl通信时间](./doc.md#event统计nccl通信时间 )
 
 8、[conv search algo](./doc.md#conv_algo_search)
+
+9、[scalar div计算强度](./doc.md#只有一个div操作时是否需要转成乘法)

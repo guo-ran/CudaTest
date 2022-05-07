@@ -173,4 +173,18 @@ nsys上统计的Total Time是6.787ms，是96个kernel总时间。为什么这个
 
 对于这种情况，应该用cuda Event统计的时间比较准，或者打开qdrep文件测量总的一段时间，不应该只看nsys命令行中统计的时间。
 
-
+#### 只有一个div操作时是否需要转成乘法
+当只有一个scalar div操作时，是否需要转成乘倒数，这时是计算密集型还是访存密集型，代码在[test_div_compute.cu](code/elemwise/test_div_compute.cu)
+用16M个float类型数据进行测试，观察ncu文件，div时利用率比例为，带宽达到1.22T：
+![WechatIMG1](doc/image/WechatIMG1.png)
+mul时利用率比例为，带宽达到1.23T：
+![WechatIMG2](doc/image/WechatIMG2.png)
+可以说明，只有一个除法时，计算不是瓶颈，带宽是瓶颈
+编译：
+```
+/usr/local/cuda-11.6/bin/nvcc test_div_compute.cu -arch=sm_80 -O3 -std=c++11
+```
+运行：
+```
+ /usr/local/cuda/bin/ncu --section ".*" --target-processes all -f ./a.out
+```
