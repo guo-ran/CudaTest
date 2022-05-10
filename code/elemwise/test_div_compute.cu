@@ -16,6 +16,22 @@ template <typename T> struct DivFunctor {
 };
 
 template <typename T>
+__global__ void NotPackCopyKernel(int64_t elem_cnt, T value, T *ptr) {
+  for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < elem_cnt;
+       i += gridDim.x * blockDim.x) {
+    ptr[i] = ptr[i] + 1;
+  }
+}
+
+template <typename T>
+__global__ void NotPackDivKernel(int64_t elem_cnt, T value, T *ptr) {
+  for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < elem_cnt;
+       i += gridDim.x * blockDim.x) {
+    ptr[i] = ptr[i] / value;
+  }
+}
+
+template <typename T>
 __global__ void FillValue(int64_t elem_cnt, T value, T *ptr) {
   for (int i = threadIdx.x + blockIdx.x * blockDim.x; i < elem_cnt;
        i += gridDim.x * blockDim.x) {
@@ -34,6 +50,10 @@ int main() {
   CudaCheck(cudaMalloc(&out_ptr, elem_cnt * sizeof(T)));
   FillValue<<<elem_cnt / 1024, 1024, 0, stream>>>(elem_cnt, static_cast<T>(4),
                                                   in_ptr);
+  NotPackCopyKernel<<<elem_cnt / 1024, 1024, 0, stream>>>(
+      elem_cnt, static_cast<T>(2), in_ptr);
+  NotPackDivKernel<<<elem_cnt / 1024, 1024, 0, stream>>>(
+      elem_cnt, static_cast<T>(2), in_ptr);
   CudaCheck(oneflow::cuda::elementwise::Unary<DivFunctor<T>, T, T>(
       DivFunctor<T>(), elem_cnt, out_ptr, in_ptr, stream));
   CudaCheck(cudaStreamSynchronize(stream));
