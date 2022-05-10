@@ -188,7 +188,7 @@ nsys上统计的Total Time是6.787ms，是96个kernel总时间。为什么这个
 包含不pack的NotPackCopyKernel和NotPackDivKernel，pack 4的PackCopyKernel和PackDivKernel和使用elemwise模板的div测试
 
 使用float类型测试：
-NotPackCopyKernel 132us 有效带宽904GB/s
+NotPackCopyKernel 132us 有效带宽904GB/s(是ncu显示的，实际有部分缓存，以时间为准)
 
 ![image-20220510191112021](doc/image/image-20220510191112021.png)
 
