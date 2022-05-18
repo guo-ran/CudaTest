@@ -188,3 +188,34 @@ mul时利用率比例为，带宽达到1.23T：
 ```
  /usr/local/cuda/bin/ncu --section ".*" --target-processes all -f ./a.out
 ```
+
+#### interaction sum测试
+[test_row_reduce.cu](code/interaction_sum/test_row_reduce.cu)
+编译：
+```
+/usr/local/cuda-11.6/bin/nvcc test_row_reduce.cu -arch=sm_80 -O3 -std=c++11
+```
+运行：
+```
+ /usr/local/cuda/bin/ncu --section ".*" --target-processes all -f ./a.out
+```
+固定39 half block_size 256
+
+前向：
+|             | No pack                          | Pack 2                           | fm_order             |
+| ----------- | -------------------------------- | -------------------------------- | ------------------- |
+| 55296/8 16  | 18.56us 464.88GB/s occupancy 30% | 37.89us 227.74GB/s occupancy 15% | 32.7us 263.83GB/s   |
+| 55296 16    | 80.61us 867.43GB/s  93.66%       | 103.30us 691.80GB/s 96.56%       | 207.20us 338.44GB/s |
+| 55296/8 128 | 75.74us  922GB/s                 | 89.22 783.82GB/s                 | 74.82 935.00GB/s    |
+| 55296 128   | 520us 1.09TB/s                   | 625.44  903.66GB/s               | 510.43 1.11TB/s     |
+
+后向：
+|             | No pack              | Pack 2               | fm_order               |
+| ----------- | -------------------- | -------------------- | --------------------- |
+| 55296/8 16  | 34.50us  256.53GB/s  | 35.10us  252.09GB/s  | 41.25us   214.62GB/s  |
+| 55296 16    | 199.17us  635.84GB/s | 219.07us  778.32GB/s | 237.98us   527.56GB/s |
+| 55296/8 128 | 176.06us  722.99GB/s | 198.43us  831.25GB/s | 179.36us  766.64GB/s  |
+| 55296 128   | 1.41us  804.50GB/s   | 1.40us  1.05GB/s     | 1.28us   950.21GB/s   |
+
+后向Pack 2统计的带宽高是因为L1命中率低。
+FeatureInteractionSumSharedMemImpl和FeatureInteractionSumSharedMemImpl2的方法在这个case下效果很差。
