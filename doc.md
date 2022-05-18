@@ -173,14 +173,10 @@ nsys上统计的Total Time是6.787ms，是96个kernel总时间。为什么这个
 
 对于这种情况，应该用cuda Event统计的时间比较准，或者打开qdrep文件测量总的一段时间，不应该只看nsys命令行中统计的时间。
 
-#### 只有一个div操作时是否需要转成乘法
-当只有一个scalar div操作时，是否需要转成乘倒数，这时是计算密集型还是访存密集型，代码在[test_div_compute.cu](code/elemwise/test_div_compute.cu)
-用16M个float类型数据进行测试，观察ncu文件，div时利用率比例为，带宽达到1.22T：
-![WechatIMG1](doc/image/WechatIMG1.png)
-mul时利用率比例为，带宽达到1.23T：
-![WechatIMG2](doc/image/WechatIMG2.png)
-可以说明，只有一个除法时，计算不是瓶颈，带宽是瓶颈
+#### div操作的代价
+在A100上实验当只有一个scalar div操作时，是否需要转成乘倒数，这时是计算密集型还是访存密集型，代码在[test_div_compute.cu](code/elemwise/test_div_compute.cu)
 编译：
+
 ```
 /usr/local/cuda-11.6/bin/nvcc test_div_compute.cu -arch=sm_80 -O3 -std=c++11
 ```
@@ -188,6 +184,37 @@ mul时利用率比例为，带宽达到1.23T：
 ```
  /usr/local/cuda/bin/ncu --section ".*" --target-processes all -f ./a.out
 ```
+
+包含不pack的NotPackCopyKernel和NotPackDivKernel，pack 4的PackCopyKernel和PackDivKernel和使用elemwise模板的div测试
+
+使用float类型测试：
+NotPackCopyKernel 132us 有效带宽904GB/s(是ncu显示的，实际有部分缓存，以时间为准)
+
+![image-20220510191112021](doc/image/image-20220510191112021.png)
+
+NotPackDivKernel 142us 有效带宽836GB/s
+
+![image-20220510191224897](doc/image/image-20220510191224897.png)
+
+PackCopyKernel 92.83us 有效带宽1.24TB/s
+
+![image-20220510191308196](doc/image/image-20220510191308196.png)
+
+PackDivKernel 94.72us 有效带宽1.23TB/s
+
+![image-20220510191343312](doc/image/image-20220510191343312.png)
+
+Elemwise: 94.3us 和PackDivKernel接近
+
+以上类型换成int后，Copy 都不变
+
+NotPackDivKernel 167us  有效带宽713GB/s
+
+![image-20220510191515530](doc/image/image-20220510191515530.png)PackDivKernel 96.19us 有效带宽1.23TB/s
+
+![image-20220510191648068](doc/image/image-20220510191648068.png)
+
+由以上测试可以得到结论：(1) elemwise操作都可以pack多个元素，可以不用将除法转乘法，但是pack_size=1，除法会影响性能。(2)整数除法比浮点除法更昂贵
 
 #### interaction sum测试
 [test_row_reduce.cu](code/interaction_sum/test_row_reduce.cu)

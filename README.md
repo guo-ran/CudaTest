@@ -16,4 +16,4 @@
 
 8、[conv search algo](./doc.md#conv_algo_search)
 
-9、[scalar div计算强度](./doc.md#只有一个div操作时是否需要转成乘法)
+9、[scalar div计算强度](./doc.md#div操作的代价)
