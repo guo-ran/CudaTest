@@ -275,7 +275,7 @@ for (int j = 0; j < param.in_feature_dim[i]; ++j) {
 
 后向Pack 2统计的带宽高是因为L1命中率低。左图是no pack的，右图是pack 2的。
 
-<img src="doc/image/image-20220519145348537.png" alt="image-20220519145348537" style="zoom: 33%;" /><img src="../../work/note/Notebook/image/image-20220519145434737.png" alt="image-20220519145434737" style="zoom:33%;" />
+<img src="doc/image/image-20220519145348537.png" alt="image-20220519145348537" style="zoom: 33%;" /><img src="doc/image/image-20220519145434737.png" alt="image-20220519145434737" style="zoom:33%;" />
 
 后向Pack 2比不pack 慢的原因是Pack的L1 cache命中率低，后向会读两次in，如果给不pack版本的in_feature_dim前加上unroll也会变慢。pack和unroll in_feature_dim引入的指令并行都是让两次in的中间加载了更多的数据，所以导致命中率低了。
 
