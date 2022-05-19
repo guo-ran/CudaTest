@@ -218,7 +218,9 @@ NotPackDivKernel 167us  有效带宽713GB/s
 
 #### interaction sum测试
 [test_row_reduce.cu](code/interaction_sum/test_row_reduce.cu)
+
 编译：
+
 ```
 /usr/local/cuda-11.6/bin/nvcc test_row_reduce.cu -arch=sm_80 -O3 -std=c++11
 ```
@@ -228,6 +230,8 @@ NotPackDivKernel 167us  有效带宽713GB/s
 ```
 固定39 half block_size 256
 
+其中FeatureInteractionSumSharedMemImpl和FeatureInteractionSumSharedMemImpl2的方法在这个case下效果很差。只测其他几种
+
 前向：
 |             | No pack                          | Pack 2                           | fm_order             |
 | ----------- | -------------------------------- | -------------------------------- | ------------------- |
@@ -236,7 +240,32 @@ NotPackDivKernel 167us  有效带宽713GB/s
 | 55296/8 128 | 75.74us  922GB/s                 | 89.22 783.82GB/s                 | 74.82 935.00GB/s    |
 | 55296 128   | 520us 1.09TB/s                   | 625.44  903.66GB/s               | 510.43 1.11TB/s     |
 
+前向计算pack比不pack性能差的原因：
+
+看ncu的source，发现有很多LOAD，我的LOAD是写在feature_dim的循环内的，如果不展开的话source应该只有一条才对，说明feature_dim这个循环被展开了。而且是相同的寄存器，这个展开是异常的。看非pack的实现，展开的都是不同寄存器，是正常的。
+
+左图是pack 2的，右图是no pack的
+
+<img src="doc/image/image-20220519143705378.png" alt="image-20220519143705378" style="zoom: 25%;" /><img src="doc/image/image-20220519145655284.png" alt="image-20220519145655284" style="zoom:25%;" />
+
+所以问题来源于这个循环展开。在Pack实现的代码中这行前面加个unroll，控制展开后，速度结果正常了。
+
+```
+#pragma unroll
+for (int j = 0; j < param.in_feature_dim[i]; ++j) {
+```
+
+|             | Pack 2             |
+| ----------- | ------------------ |
+| 55296/8 16  | 19.14us 450.10GB/s |
+| 55296 16    | 68.67us 1.04TB/s   |
+| 55296/8 128 | 63.62us 1.10TB/s   |
+| 55296 128   | 428.03us 1.32TB/s  |
+
+不加Fill的话性能会有下降，测试性能需要注意数据问题。
+
 后向：
+
 |             | No pack              | Pack 2               | fm_order               |
 | ----------- | -------------------- | -------------------- | --------------------- |
 | 55296/8 16  | 34.50us  256.53GB/s  | 35.10us  252.09GB/s  | 41.25us   214.62GB/s  |
@@ -244,5 +273,11 @@ NotPackDivKernel 167us  有效带宽713GB/s
 | 55296/8 128 | 176.06us  722.99GB/s | 198.43us  831.25GB/s | 179.36us  766.64GB/s  |
 | 55296 128   | 1.41us  804.50GB/s   | 1.40us  1.05GB/s     | 1.28us   950.21GB/s   |
 
-后向Pack 2统计的带宽高是因为L1命中率低。
-FeatureInteractionSumSharedMemImpl和FeatureInteractionSumSharedMemImpl2的方法在这个case下效果很差。
+后向Pack 2统计的带宽高是因为L1命中率低。左图是no pack的，右图是pack 2的。
+
+<img src="doc/image/image-20220519145348537.png" alt="image-20220519145348537" style="zoom: 33%;" /><img src="../../work/note/Notebook/image/image-20220519145434737.png" alt="image-20220519145434737" style="zoom:33%;" />
+
+后向Pack 2比不pack 慢的原因是Pack的L1 cache命中率低，后向会读两次in，如果给不pack版本的in_feature_dim前加上unroll也会变慢。pack和unroll in_feature_dim引入的指令并行都是让两次in的中间加载了更多的数据，所以导致命中率低了。
+
+因此在这个例子中应该减少并行的宽度， 减少L1的压力，可能提升性能。
+
