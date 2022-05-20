@@ -42,7 +42,8 @@ constexpr int M_BLOCKS = 2;
 constexpr int K_BLOCKS = 8;
 constexpr int out_num_cols = 480;
 constexpr int out_num_cols_pack4 = out_num_cols / 4;
-constexpr int NUM_STEPS_PER_WARP = 4;
+constexpr int num_step = 8;
+constexpr int NUM_STEPS_PER_WARP = num_step / num_warp_per_block;
 
 //每个warp处理2个step. 8个step就是4个warp
 //每个warp一个acc buf.
