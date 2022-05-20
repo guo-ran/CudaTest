@@ -25,7 +25,7 @@ struct alignas(sizeof(T) * pack_size) Pack {
   T elem[pack_size];
 };
 
-constexpr int num_warp_per_block = 4;
+constexpr int num_warp_per_block = 2;
 constexpr int padded_num_rows = 32;
 constexpr int skew_half = 8; // for align and bank conflict
 constexpr int shared_mem_num_cols = 128 + skew_half;
@@ -42,6 +42,7 @@ constexpr int M_BLOCKS = 2;
 constexpr int K_BLOCKS = 8;
 constexpr int out_num_cols = 480;
 constexpr int out_num_cols_pack4 = out_num_cols / 4;
+constexpr int NUM_STEPS_PER_WARP = 4;
 
 //每个warp处理2个step. 8个step就是4个warp
 //每个warp一个acc buf.
@@ -108,7 +109,7 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
       }
     }
 
-    for (int step = 0; step < 2; ++step) {
+    for (int step = 0; step < NUM_STEPS_PER_WARP; ++step) {
       nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, TILE_DIM, TILE_DIM,
                              TILE_DIM, half, nvcuda::wmma::row_major>
           a[M_BLOCKS];
@@ -117,7 +118,7 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
           b[M_BLOCKS];
       for (int j = 0; j < M_BLOCKS; ++j) {
         half *tile_ptr = buf + j * TILE_DIM * shared_mem_num_cols +
-                         (2 * warp_id + step) * TILE_DIM;
+                         (NUM_STEPS_PER_WARP * warp_id + step) * TILE_DIM;
         nvcuda::wmma::load_matrix_sync(a[j], tile_ptr, shared_mem_num_cols);
         nvcuda::wmma::load_matrix_sync(b[j], tile_ptr, shared_mem_num_cols);
       }
@@ -220,7 +221,7 @@ int main() {
   CudaCheck(cudaMemcpy(in_1_ptr, host_in_1_ptr, in_1_size, cudaMemcpyDefault));
 
   int block_dim_x = 32;
-  int block_dim_y = 4;
+  int block_dim_y = num_warp_per_block;
   int num_blocks = batch_size;
   Param<T, 2> param;
   param.in[0] = in_0_ptr;
