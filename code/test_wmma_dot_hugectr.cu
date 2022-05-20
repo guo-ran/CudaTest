@@ -315,7 +315,13 @@ inline void dotBasedInteractFwd(const void *bottom_mlp_input,
           ? smem_elems_per_warp_mat
           : smem_elems_per_warp_acc;
   uint output_size = num_cols + (num_rows * (num_rows - 1) >> 1) + kPaddingSize;
-
+  std::cout<<"smem_rows_per_warp "<<smem_rows_per_warp<<std::endl;
+  std::cout<<"smem_elems_per_warp_mat "<<smem_elems_per_warp_mat<<std::endl;
+  std::cout<<"SKEW_HALF "<<SKEW_HALF<<std::endl;
+  std::cout<<"SKEW_HALF_ACC "<<SKEW_HALF_ACC<<std::endl;
+  std::cout<<"SMEM_STRIDE "<<SMEM_STRIDE<<std::endl;
+  std::cout<<"SMEM_STRIDE_ACC "<<SMEM_STRIDE_ACC<<std::endl;
+  std::cout<<"smem_elems_per_warp "<<smem_elems_per_warp<<std::endl;
   bool float4_predicate = !((num_cols & 7) || (output_size & 7));
 
   if (float4_predicate) {

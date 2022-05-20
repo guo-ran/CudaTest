@@ -15,11 +15,12 @@ void CudaCheck(cudaError_t err) {
 template <typename T, int32_t N> struct Param {
   const T *in[N];
   int32_t in_feature_dim[N];
+  int32_t dim_start_offset[N];
   T *out;
   int32_t num_in;
 };
 
-template<typename T, size_t pack_size>
+template <typename T, size_t pack_size>
 struct alignas(sizeof(T) * pack_size) Pack {
   T elem[pack_size];
 };
@@ -38,46 +39,83 @@ constexpr int out_num_cols = 480;
 constexpr int out_num_cols_pack4 = out_num_cols / 4;
 
 template <int32_t N>
-__global__ void DotFeatureInteraction(int64_t batch_size,
-                                      int64_t embedding_size,
-                                      int64_t embedding_num_pack,
+__global__ void DotFeatureInteraction(int batch_size, int embedding_size,
+                                      int embedding_num_pack,
                                       Param<half, N> param) {
   extern __shared__ __align__(sizeof(double)) unsigned char shared_buf[];
   int warp_id = threadIdx.y;
   half *buf =
       reinterpret_cast<half *>(shared_buf + warp_id * shared_mem_stride_bytes);
-  Pack<half, 4> *buf_pack4 =
-      reinterpret_cast<Pack<half, 4> *>(shared_buf + warp_id * shared_mem_stride_bytes);
+  Pack<half, 4> *buf_pack4 = reinterpret_cast<Pack<half, 4> *>(
+      shared_buf + warp_id * shared_mem_stride_bytes);
   float *acc_buf =
       reinterpret_cast<float *>(shared_buf + warp_id * shared_mem_stride_bytes);
   int global_warp_id = warp_id + blockDim.y * blockIdx.x;
   for (int batch_idx = global_warp_id; batch_idx < batch_size;
        batch_idx += blockDim.y * gridDim.x) {
     half *batch_out = param.out + batch_idx * out_num_cols;
-    Pack<half, 4>  *batch_out_pack4 = reinterpret_cast<Pack<half, 4> *>(param.out) + batch_idx * out_num_cols_pack4;
+    Pack<half, 4> *batch_out_pack4 =
+        reinterpret_cast<Pack<half, 4> *>(param.out) +
+        batch_idx * out_num_cols_pack4;
     // 1. load in to shared
-    int row = 0;
-#pragma unroll
+
+    /*
     for (int i = 0; i < N; ++i) {
-      //if (i >= param.num_in) {
-      //  break;
-      //}
-      //const half *batch_in =
-      //    param.in[i] + batch_idx * param.in_feature_dim[i] * embedding_size;
-      const Pack<half, 4>* batch_in = reinterpret_cast<const Pack<half, 4>*>(param.in[i]) + batch_idx * param.in_feature_dim[i] * embedding_num_pack;
+      if (i >= param.num_in) {
+        break;
+      }
+      int start_offset = param.dim_start_offset[i];
+      const Pack<half, 4>* batch_in = reinterpret_cast<const Pack<half,
+4>*>(param.in[i]) + batch_idx * param.in_feature_dim[i] * embedding_num_pack;
+#pragma unroll
       for (int j = 0; j < param.in_feature_dim[i]; ++j) {
-        for (int col = threadIdx.x; col < embedding_num_pack; col += blockDim.x) {
-          buf_pack4[row * shared_mem_num_cols_pack4 + col] =
-              batch_in[j * embedding_num_pack + col];
-        }
-        row++;
+        int row = start_offset + j;
+       // for (int col = threadIdx.x; col < embedding_num_pack; col +=
+blockDim.x) { int col = threadIdx.x; buf_pack4[row * shared_mem_num_cols_pack4 +
+col] = batch_in[j * embedding_num_pack + col];
+        //}
       }
     }
+    */
+
+    const Pack<half, 4> *batch_in_0 =
+        reinterpret_cast<const Pack<half, 4> *>(param.in[0]) +
+        batch_idx * 1 * embedding_num_pack;
+    buf_pack4[threadIdx.x] = batch_in_0[threadIdx.x];
+    const Pack<half, 4> *batch_in =
+        reinterpret_cast<const Pack<half, 4> *>(param.in[1]) +
+        batch_idx * 26 * embedding_num_pack;
+#pragma unroll
+    for (int j = 0; j < 26; ++j) {
+      int row = 1 + j;
+      // for (int col = threadIdx.x; col < embedding_num_pack; col +=
+      // blockDim.x) {
+      int col = threadIdx.x;
+      buf_pack4[row * shared_mem_num_cols_pack4 + col] =
+          batch_in[j * embedding_num_pack + col];
+      //}
+    }
+
+    /*
+        const half *batch_in_0 = param.in[0] + batch_idx *
+       param.in_feature_dim[0] * embedding_size; const half *batch_in_1 =
+       param.in[1] + batch_idx * param.in_feature_dim[1] * embedding_size; const
+       half *sample_input = batch_in_0; for (int i = 0; i < 27; ++i) {
+          //for (int col = threadIdx.x; col < embedding_num_pack; col +=
+       blockDim.x) { int col = threadIdx.x;
+          ((float2 *)(buf + i * shared_mem_num_cols))[col] =
+              ((float2 *)sample_input)[col];
+          //}
+          sample_input = (i == 0) ? batch_in_1 : (sample_input +
+       embedding_size);
+        }
+    */
+
     Pack<half, 4> zero;
-    for(int k=0;k<4;++k) {
+    for (int k = 0; k < 4; ++k) {
       zero.elem[k] = 0;
     }
-    for (int i = row; i < padded_num_rows; ++i) {
+    for (int i = 27; i < padded_num_rows; ++i) {
       for (int col = threadIdx.x; col < embedding_num_pack; col += blockDim.x) {
         buf_pack4[i * shared_mem_num_cols_pack4 + col] = zero;
       }
@@ -109,18 +147,18 @@ __global__ void DotFeatureInteraction(int64_t batch_size,
       }
       for (int i = 0; i < M_BLOCKS; ++i) {
         for (int j = 0; j < M_BLOCKS; ++j) {
-          if (i < j) {
-            continue;
-          }
+          // if (i < j) {
+          //  continue;
+          //}
           nvcuda::wmma::mma_sync(acc[i][j], a[i], b[j], acc[i][j]);
         }
       }
     }
     for (int i = 0; i < M_BLOCKS; i++) {
       for (int j = 0; j < M_BLOCKS; j++) {
-        if (i < j) {
-          continue;
-        }
+        // if (i < j) {
+        //  continue;
+        //}
         float *tile_ptr =
             acc_buf + i * TILE_DIM * shared_mem_num_cols_acc + j * TILE_DIM;
         nvcuda::wmma::store_matrix_sync(tile_ptr, acc[i][j],
@@ -199,6 +237,8 @@ int main() {
   param.in[1] = in_1_ptr;
   param.in_feature_dim[0] = feature_dims.at(0);
   param.in_feature_dim[1] = feature_dims.at(1);
+  param.dim_start_offset[0] = 0;
+  param.dim_start_offset[1] = feature_dims.at(0);
   param.num_in = 2;
   param.out = out_ptr;
   size_t shared_mem_bytes = block_dim_y * shared_mem_stride_bytes;
