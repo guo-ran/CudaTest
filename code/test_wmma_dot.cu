@@ -27,10 +27,11 @@ struct alignas(sizeof(T) * pack_size) Pack {
 
 constexpr int num_warp_per_block = 2;
 constexpr int padded_num_rows = 32;
-constexpr int skew_half = 8; // for align and bank conflict
+constexpr int skew_half = 8;     // for align and bank conflict
+constexpr int skew_half_acc = 4; // for align and bank conflict
 constexpr int shared_mem_num_cols = 128 + skew_half;
 constexpr int shared_mem_num_cols_pack4 = shared_mem_num_cols / 4;
-constexpr int shared_mem_num_cols_acc = 32 + skew_half;
+constexpr int shared_mem_num_cols_acc = 32 + skew_half_acc;
 constexpr int in_shared_mem_bytes =
     padded_num_rows * shared_mem_num_cols_acc * sizeof(half);
 constexpr int acc_shared_mem_stride_bytes =
@@ -44,7 +45,7 @@ constexpr int out_num_cols = 480;
 constexpr int out_num_cols_pack4 = out_num_cols / 4;
 constexpr int num_step = 8;
 constexpr int NUM_STEPS_PER_WARP = num_step / num_warp_per_block;
-
+constexpr int unroll_dim = 4;
 //每个warp处理2个step. 8个step就是4个warp
 //每个warp一个acc buf.
 
@@ -75,21 +76,41 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
     for (int k = 0; k < 4; ++k) {
       zero.elem[k] = 0;
     }
-#pragma unroll
-    for (int row = threadIdx.y; row < 32; row += blockDim.y) {
+    for (int row = threadIdx.y * unroll_dim; row < 27;
+         row += unroll_dim * blockDim.y) {
       const Pack<half, 4> *batch_in;
-      int row_offset;
-      if (row == 0) {
-        batch_in = batch_in_0;
-      } else {
-        batch_in = batch_in_1 + (row - 1) * embedding_num_pack;
+#pragma unroll
+      for (int k = 0; k < unroll_dim; ++k) {
+        int row_id = row + k;
+        if (row_id >= 27) {
+          break;
+        }
+        if (row_id == 0) {
+          batch_in = batch_in_0;
+        } else {
+          batch_in = batch_in_1 + (row_id - 1) * embedding_num_pack;
+        }
+        int col = threadIdx.x;
+        buf_pack4[row_id * shared_mem_num_cols_pack4 + col] = batch_in[col];
       }
+    }
+//#pragma unroll(8)
+//    for (int row = threadIdx.y; row < 27; row += blockDim.y) {
+//      const Pack<half, 4> *batch_in;
+//      int row_offset;
+//      if (row == 0) {
+//        batch_in = batch_in_0;
+//      } else {
+//        batch_in = batch_in_1 + (row - 1) * embedding_num_pack;
+//      }
+//      int col = threadIdx.x;
+//      buf_pack4[row * shared_mem_num_cols_pack4 + col] = batch_in[col];
+//    }
+#pragma unroll
+    for (int i = threadIdx.y; i < 5; i += blockDim.y) {
+      int row = 27 + i;
       int col = threadIdx.x;
-      if (row < 27) {
-        buf_pack4[row * shared_mem_num_cols_pack4 + col] = batch_in[col];
-      } else {
-        buf_pack4[row * shared_mem_num_cols_pack4 + col] = zero;
-      }
+      buf_pack4[row * shared_mem_num_cols_pack4 + col] = zero;
     }
     __syncthreads();
     if (warp_id == 0) {
@@ -97,17 +118,20 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
         batch_out_pack4[col] = buf_pack4[col];
       }
     }
-
+    int idx2offset[2][2];
+    idx2offset[0][0] = 0;
+    idx2offset[1][0] = 1;
+    idx2offset[1][1] = 2;
     // 2. load to tensor core
     nvcuda::wmma::fragment<nvcuda::wmma::accumulator, TILE_DIM, TILE_DIM,
                            TILE_DIM, float>
-        acc[M_BLOCKS][M_BLOCKS];
+        acc[3];
     for (int i = 0; i < M_BLOCKS; ++i) {
       for (int j = 0; j < M_BLOCKS; ++j) {
         if (i < j) {
           continue;
         }
-        nvcuda::wmma::fill_fragment(acc[i][j], 0.0f);
+        nvcuda::wmma::fill_fragment(acc[idx2offset[i][j]], 0.0f);
       }
     }
     nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, TILE_DIM, TILE_DIM, TILE_DIM,
@@ -116,6 +140,7 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
     nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, TILE_DIM, TILE_DIM, TILE_DIM,
                            half, nvcuda::wmma::col_major>
         b[M_BLOCKS];
+
     for (int step = 0; step < NUM_STEPS_PER_WARP; ++step) {
       for (int j = 0; j < M_BLOCKS; ++j) {
         half *tile_ptr = buf + j * TILE_DIM * shared_mem_num_cols +
@@ -128,7 +153,8 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
           if (i < j) {
             continue;
           }
-          nvcuda::wmma::mma_sync(acc[i][j], a[i], b[j], acc[i][j]);
+          nvcuda::wmma::mma_sync(acc[idx2offset[i][j]], a[i], b[j],
+                                 acc[idx2offset[i][j]]);
         }
       }
     }
@@ -142,7 +168,7 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
         }
         float *tile_ptr = acc_buf + warp_id * elem_cnt_per_warp +
                           i * TILE_DIM * shared_mem_num_cols_acc + j * TILE_DIM;
-        nvcuda::wmma::store_matrix_sync(tile_ptr, acc[i][j],
+        nvcuda::wmma::store_matrix_sync(tile_ptr, acc[idx2offset[i][j]],
                                         shared_mem_num_cols_acc,
                                         nvcuda::wmma::mem_row_major);
       }
@@ -158,17 +184,33 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
     }
     __syncthreads();
     half *emb_out = batch_out + embedding_size;
+    for (int base_row = threadIdx.y * unroll_dim;
+         base_row < M_BLOCKS * TILE_DIM; base_row += unroll_dim * blockDim.y) {
 #pragma unroll
-    for (int row = threadIdx.y; row < M_BLOCKS * TILE_DIM; row += blockDim.y) {
-      for (int col = threadIdx.x; col < M_BLOCKS * TILE_DIM;
-           col += blockDim.x) {
-        if (col < row) {
-          uint offset = (row * (row - 1)) / 2 + col;
-          emb_out[offset] =
-              __float2half(acc_buf[row * shared_mem_num_cols_acc + col]);
+      for (int k = 0; k < unroll_dim; ++k) {
+        int row = base_row + k;
+        for (int col = threadIdx.x; col < M_BLOCKS * TILE_DIM;
+             col += blockDim.x) {
+          if (col < row) {
+            uint offset = (row * (row - 1)) / 2 + col;
+            emb_out[offset] =
+                __float2half(acc_buf[row * shared_mem_num_cols_acc + col]);
+          }
         }
       }
     }
+    //#pragma unroll
+    //    for (int row = threadIdx.y; row < M_BLOCKS * TILE_DIM; row +=
+    //    blockDim.y) {
+    //      for (int col = threadIdx.x; col < M_BLOCKS * TILE_DIM;
+    //           col += blockDim.x) {
+    //        if (col < row) {
+    //          uint offset = (row * (row - 1)) / 2 + col;
+    //          emb_out[offset] =
+    //              __float2half(acc_buf[row * shared_mem_num_cols_acc + col]);
+    //        }
+    //      }
+    //    }
     if (warp_id == 0 && threadIdx.x == 0) {
       batch_out[out_num_cols - 1] = 0;
     }
