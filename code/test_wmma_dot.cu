@@ -98,7 +98,7 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
       int col = threadIdx.x;
       buf_pack4[row * shared_mem_num_cols_pack4 + col] = zero;
     }
-    __syncthreads();
+    __syncthreads();// if no this thread sync, error result
     if (warp_id == 1) {
       for (int col = threadIdx.x; col < embedding_num_pack; col += blockDim.x) {
         batch_out_pack4[col] = buf_pack4[col];
@@ -134,7 +134,6 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
         acc_buf + i * TILE_DIM * shared_mem_num_cols_acc + j * TILE_DIM;
     nvcuda::wmma::store_matrix_sync(tile_ptr, acc, shared_mem_num_cols_acc,
                                     nvcuda::wmma::mem_row_major);
-    __syncthreads();
     half *emb_out = batch_out + embedding_size;
     for (int base_row = threadIdx.y * unroll_dim;
          base_row < M_BLOCKS * TILE_DIM; base_row += unroll_dim * blockDim.y) {
@@ -154,7 +153,6 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
     if (warp_id == 0 && threadIdx.x == 0) {
       batch_out[out_num_cols - 1] = 0;
     }
-    __syncthreads();
   }
 }
 // 32 128
