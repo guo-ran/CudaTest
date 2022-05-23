@@ -51,7 +51,7 @@ constexpr int unroll_dim = 4;
 template <int32_t N>
 __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
                                       int embedding_num_pack,
-                                      Param<half, N> param) {
+                                      Param<half, N> param, half* output_concat) {
   extern __shared__ __align__(sizeof(double)) unsigned char shared_buf[];
   int warp_id = threadIdx.y;
   half *buf = reinterpret_cast<half *>(shared_buf);
@@ -63,6 +63,8 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
     Pack<half, 4> *batch_out_pack4 =
         reinterpret_cast<Pack<half, 4> *>(param.out) +
         batch_idx * out_num_cols_pack4;
+    const Pack<half, 4>* batch_output_concat = reinterpret_cast<const Pack<half, 4>*>(output_concat) + batch_idx * embedding_num_pack;
+    
     const Pack<half, 4> *batch_in_0 =
         reinterpret_cast<const Pack<half, 4> *>(param.in[0]) +
         batch_idx * param.in_feature_dim[0] * embedding_num_pack;
@@ -101,7 +103,7 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
     __syncthreads();// if no this thread sync, error result
     if (warp_id == 1) {
       for (int col = threadIdx.x; col < embedding_num_pack; col += blockDim.x) {
-        batch_out_pack4[col] = buf_pack4[col];
+        batch_out_pack4[col] = batch_output_concat[col];//buf_pack4[col];
       }
     }
     // 2. load to tensor core
@@ -136,11 +138,12 @@ __global__ void DotFeatureInteraction(int batch_size, int embedding_size,
                                     nvcuda::wmma::mem_row_major);
     half *emb_out = batch_out + embedding_size;
     for (int base_row = threadIdx.y * unroll_dim;
-         base_row < M_BLOCKS * TILE_DIM; base_row += unroll_dim * blockDim.y) {
+         base_row < 27; base_row += unroll_dim * blockDim.y) {
 #pragma unroll
       for (int k = 0; k < unroll_dim; ++k) {
         int row = base_row + k;
-        for (int col = threadIdx.x; col < M_BLOCKS * TILE_DIM;
+        if(row>=27) {break;}
+        for (int col = threadIdx.x; col < 27;
              col += blockDim.x) {
           if (col < row) {
             uint offset = (row * (row - 1)) / 2 + col;
@@ -168,8 +171,9 @@ int main() {
   using T = half; // int
   int64_t batch_size = 55296 / 8;
   int64_t vector_size = 128;
-  int64_t vector_num_pack = vector_size / 4;
+  int64_t embedding_num_pack = vector_size / 4;
   std::vector<int64_t> feature_dims = {1, 26};
+  const int features_concated_dim = 27;
   T *host_in_0_ptr;
   T *in_0_ptr;
   size_t in_0_size = batch_size * feature_dims.at(0) * vector_size * sizeof(T);
@@ -182,7 +186,8 @@ int main() {
   CudaCheck(cudaMalloc(&in_1_ptr, in_1_size));
   T *host_out_ptr;
   T *out_ptr;
-  int64_t out_dim = 480;
+  int padding=1;
+  int64_t out_dim = vector_size + features_concated_dim * (features_concated_dim - 1) / 2 + padding;
   size_t out_size = batch_size * out_dim * sizeof(T);
   CudaCheck(cudaMalloc(&out_ptr, out_size));
   CudaCheck(cudaMallocHost(&host_out_ptr, out_size));
@@ -215,7 +220,7 @@ int main() {
   size_t shared_mem_bytes = std::max(in_shared_mem_bytes, acc_shared_mem_bytes);
   DotFeatureInteraction<2>
       <<<num_blocks, dim3(block_dim_x, block_dim_y), shared_mem_bytes,
-         stream>>>(batch_size, vector_size, vector_num_pack, param);
+         stream>>>(batch_size, vector_size, embedding_num_pack, param, in_0_ptr);
 
   CudaCheck(cudaMemcpy(host_out_ptr, out_ptr, out_size, cudaMemcpyDefault));
 
@@ -229,7 +234,7 @@ int main() {
     int out_i = i % out_dim;
     float diff = static_cast<float>(host_out_ptr[i]) -
                  static_cast<float>(out_data.at(i));
-    if (diff > 0.1) {
+    if (diff > 0.01) {
       std::cout << "i " << i << " batch_idx" << batch_idx << " out_i " << out_i
                 << " diff " << diff
                 << " out0: " << static_cast<float>(host_out_ptr[i]) << " out1 "
