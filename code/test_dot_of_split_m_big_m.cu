@@ -27,7 +27,7 @@ struct alignas(sizeof(T) * pack_size) Pack {
   T elem[pack_size];
 };
 
-constexpr int unroll_dim = 4;
+constexpr int unroll_dim = 2;
 
 template <int32_t N, int32_t pack_size, int TILE_DIM, int M_BLOCKS,
           int K_BLOCKS>
@@ -42,129 +42,102 @@ __global__ void DotFeatureInteractionHalf(
   half *buf = reinterpret_cast<half *>(shared_buf);
   Pack<half, pack_size> *buf_pack =
       reinterpret_cast<Pack<half, pack_size> *>(shared_buf);
-  float *acc_buf = reinterpret_cast<float *>(shared_buf);
-  for (int batch_idx = blockIdx.x; batch_idx < batch_size;
-       batch_idx += gridDim.x) {
-    half *batch_out = param.out + batch_idx * out_num_cols;
-    Pack<half, pack_size> *batch_out_pack =
-        reinterpret_cast<Pack<half, pack_size> *>(param.out) +
-        batch_idx * out_num_cols_num_pack;
-    const Pack<half, pack_size> *batch_output_concat =
-        reinterpret_cast<const Pack<half, pack_size> *>(param.output_concat) +
-        batch_idx * vector_num_pack;
-    /*
-        for (int col = threadIdx.x; col < vector_num_pack; col += blockDim.x) {
-    #pragma unroll
-          for (int i = 0; i < N; ++i) {
-            if (i >= param.num_in) { break; }
-            const Pack<half, pack_size>* batch_in =
-                reinterpret_cast<const Pack<half, pack_size>*>(param.in[i])
-                + batch_idx * param.in_feature_dim[i] * vector_num_pack;
-            for (int j = threadIdx.y * unroll_dim; j < param.in_feature_dim[i];
-    j+=blockDim.y* unroll_dim) { #pragma unroll for(int k=0;k<unroll_dim;++k) {
-                int in_row = j + k;
-                if(in_row>=param.in_feature_dim[i]) {break;}
-                int buf_row = param.dim_start_offset[i] + in_row;
-                //if(batch_idx==0&&threadIdx.x==0) {
-                //  printf("warp_id %d in %d row %d to buf row %d\n", warp_id,
-    i, in_row, buf_row);
-                //}
-                buf_pack[buf_row * in_shared_mem_cols_num_pack + col] =
-    batch_in[in_row * vector_num_pack + col];
-              }
-            }
-          }
-        }
-    */
-    if (warp_id == 0) {
-      for (int col = threadIdx.x; col < vector_num_pack; col += blockDim.x) {
+  float *acc_buf = reinterpret_cast<float *>(
+      shared_buf + padded_num_rows * in_shared_mem_cols * sizeof(half));
+  int batch_idx = blockIdx.x;
+  half *batch_out = param.out + batch_idx * out_num_cols;
+  Pack<half, pack_size> *batch_out_pack =
+      reinterpret_cast<Pack<half, pack_size> *>(param.out) +
+      batch_idx * out_num_cols_num_pack;
+  const int output_concat_size = 128;
+  const half *batch_output_concat =
+      param.output_concat + batch_idx * output_concat_size;
+  for (int col = threadIdx.x; col < vector_num_pack; col += blockDim.x) {
 #pragma unroll
-        for (int i = 0; i < N; ++i) {
-          if (i >= param.num_in) {
+    for (int i = 0; i < N; ++i) {
+      if (i >= param.num_in) {
+        break;
+      }
+      const Pack<half, pack_size> *batch_in =
+          reinterpret_cast<const Pack<half, pack_size> *>(param.in[i]) +
+          batch_idx * param.in_feature_dim[i] * vector_num_pack;
+      for (int j = threadIdx.y * unroll_dim; j < param.in_feature_dim[i];
+           j += blockDim.y * unroll_dim) {
+#pragma unroll
+        for (int k = 0; k < unroll_dim; ++k) {
+          int in_row = j + k;
+          if (in_row >= param.in_feature_dim[i]) {
             break;
           }
-          const Pack<half, pack_size> *batch_in =
-              reinterpret_cast<const Pack<half, pack_size> *>(param.in[i]) +
-              batch_idx * param.in_feature_dim[i] * vector_num_pack;
-#pragma unroll
-          for (int j = 0; j < param.in_feature_dim[i]; ++j) {
-            int row = param.dim_start_offset[i] + j;
-            buf_pack[row * in_shared_mem_cols_num_pack + col] =
-                batch_in[j * vector_num_pack + col];
-          }
+          int buf_row = param.dim_start_offset[i] + in_row;
+          buf_pack[buf_row * in_shared_mem_cols_num_pack + col] =
+              batch_in[in_row * vector_num_pack + col];
         }
       }
     }
-    Pack<half, pack_size> zero;
-    for (int k = 0; k < pack_size; ++k) {
-      zero.elem[k] = 0;
-    }
-    for (int j = param.features_dim + threadIdx.y; j < padded_num_rows;
-         j += blockDim.y) {
-      int col = threadIdx.x;
-      buf_pack[j * in_shared_mem_cols_num_pack + col] = zero;
-    }
-    __syncthreads(); // if no this thread sync, error result
+  }
+  __syncthreads(); // if no this thread sync, error result
 
-    if (warp_id == 1) {
-      for (int col = threadIdx.x; col < vector_num_pack; col += blockDim.x) {
-        batch_out_pack[col] = buf_pack[col]; // batch_output_concat[col];//
-      }
-    }
-    // 2. load to tensor core
-    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, TILE_DIM, TILE_DIM,
-                           TILE_DIM, float>
-        acc;
-    //nvcuda::wmma::fill_fragment(acc, 0.0f);
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, TILE_DIM, TILE_DIM, TILE_DIM,
-                           half, nvcuda::wmma::row_major>
-        a;
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, TILE_DIM, TILE_DIM, TILE_DIM,
-                           half, nvcuda::wmma::col_major>
-        b;
-    for(int blocks_id = warp_id; blocks_id < M_BLOCKS * M_BLOCKS; blocks_id += blockDim.y) {
-      int blocks_row_id = blocks_id / M_BLOCKS;
-      int blocks_col_id = blocks_id % M_BLOCKS;
+  // 2. load to tensor core
+
+  for (int blocks_id = warp_id; blocks_id < M_BLOCKS * M_BLOCKS;
+       blocks_id += blockDim.y) {
+    int blocks_row_id = blocks_id / M_BLOCKS;
+    int blocks_col_id = blocks_id % M_BLOCKS;
+    if (blocks_row_id >= blocks_col_id) {
+      nvcuda::wmma::fragment<nvcuda::wmma::accumulator, TILE_DIM, TILE_DIM,
+                             TILE_DIM, float>
+          acc;
+      nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, TILE_DIM, TILE_DIM,
+                             TILE_DIM, half, nvcuda::wmma::row_major>
+          a;
+      nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, TILE_DIM, TILE_DIM,
+                             TILE_DIM, half, nvcuda::wmma::col_major>
+          b;
       nvcuda::wmma::fill_fragment(acc, 0.0f);
       for (int step = 0; step < K_BLOCKS; ++step) {
-      half *tile_a_ptr =
-          buf + blocks_row_id * TILE_DIM * in_shared_mem_cols + step * TILE_DIM;
-      half *tile_b_ptr =
-          buf + blocks_col_id * TILE_DIM * in_shared_mem_cols + step * TILE_DIM;
-      nvcuda::wmma::load_matrix_sync(a, tile_a_ptr, in_shared_mem_cols);
-      nvcuda::wmma::load_matrix_sync(b, tile_b_ptr, in_shared_mem_cols);
-      nvcuda::wmma::mma_sync(acc, a, b, acc);
+        half *tile_a_ptr = buf + blocks_row_id * TILE_DIM * in_shared_mem_cols +
+                           step * TILE_DIM;
+        half *tile_b_ptr = buf + blocks_col_id * TILE_DIM * in_shared_mem_cols +
+                           step * TILE_DIM;
+        nvcuda::wmma::load_matrix_sync(a, tile_a_ptr, in_shared_mem_cols);
+        nvcuda::wmma::load_matrix_sync(b, tile_b_ptr, in_shared_mem_cols);
+        nvcuda::wmma::mma_sync(acc, a, b, acc);
       }
-      __syncthreads(); // if no this thread sync, error result
-      float *tile_ptr =
-        acc_buf + blocks_row_id * TILE_DIM * acc_shared_mem_cols + blocks_col_id * TILE_DIM;
+      float *tile_ptr = acc_buf +
+                        blocks_row_id * TILE_DIM * acc_shared_mem_cols +
+                        blocks_col_id * TILE_DIM;
       nvcuda::wmma::store_matrix_sync(tile_ptr, acc, acc_shared_mem_cols,
                                       nvcuda::wmma::mem_row_major);
     }
-    half *emb_out = reinterpret_cast<half *>(batch_out_pack + vector_num_pack);
-    for (int base_row = threadIdx.y * unroll_dim; base_row < param.features_dim;
-         base_row += unroll_dim * blockDim.y) {
+  }
+  __syncthreads();
+  half *emb_out = reinterpret_cast<half *>(batch_out_pack + vector_num_pack);
+  for (int base_row = threadIdx.y * unroll_dim; base_row < param.features_dim;
+       base_row += unroll_dim * blockDim.y) {
 #pragma unroll
-      for (int k = 0; k < unroll_dim; ++k) {
-        int row = base_row + k;
-        if (row >= param.features_dim) {
-          break;
-        }
-        for (int col = threadIdx.x; col < param.features_dim;
-             col += blockDim.x) {
-          if (col < row + offset) {
-            int64_t idx = row * (offset + row - 1 + offset) / 2 + col;
-            emb_out[idx] =
-                __float2half(acc_buf[row * acc_shared_mem_cols + col]);
-          }
+    for (int k = 0; k < unroll_dim; ++k) {
+      int row = base_row + k;
+      if (row >= param.features_dim) {
+        break;
+      }
+      for (int col = threadIdx.x; col < param.features_dim; col += blockDim.x) {
+        if (col < row + offset) {
+          int64_t idx = row * (offset + row - 1 + offset) / 2 + col;
+          emb_out[idx] = __float2half(acc_buf[row * acc_shared_mem_cols + col]);
         }
       }
     }
-    int thread_id = threadIdx.y * blockDim.x + threadIdx.x;
-    for (int i = thread_id; i < output_padding; i += blockDim.x * blockDim.y) {
-      batch_out[out_num_cols - 1 - i] = 0;
-    }
   }
+  int thread_id = threadIdx.y * blockDim.x + threadIdx.x;
+  for (int i = thread_id; i < output_concat_size;
+       i += blockDim.x * blockDim.y) {
+    batch_out[i] = batch_output_concat[i];
+  }
+  for (int i = thread_id; i < output_padding; i += blockDim.x * blockDim.y) {
+    batch_out[out_num_cols - 1 - i] = 0;
+  }
+  //}
 }
 // 32 128
 /*
@@ -176,8 +149,12 @@ int main() {
   using T = half; // int
   int64_t batch_size = 55296 / 8;
   int64_t vector_size = 128;
-  int64_t out_num_cols = 480;
-  std::vector<int64_t> feature_dims = {1, 26};
+  std::vector<int64_t> feature_dims = {1, 63};
+  int64_t features_dim = feature_dims.at(0) + feature_dims.at(1);
+  const int concated_padded_dim = 64;
+  int out_padding = 0;
+  int64_t out_num_cols =
+      features_dim * (features_dim - 1) / 2 + vector_size + out_padding;
   T *host_in_0_ptr;
   T *in_0_ptr;
   size_t in_0_size = batch_size * feature_dims.at(0) * vector_size * sizeof(T);
@@ -190,7 +167,7 @@ int main() {
   CudaCheck(cudaMalloc(&in_1_ptr, in_1_size));
   T *host_out_ptr;
   T *out_ptr;
-  int64_t out_dim = 480;
+  int64_t out_dim = out_num_cols;
   size_t out_size = batch_size * out_dim * sizeof(T);
   CudaCheck(cudaMalloc(&out_ptr, out_size));
   CudaCheck(cudaMallocHost(&host_out_ptr, out_size));
@@ -199,22 +176,21 @@ int main() {
   CudaCheck(cudaStreamCreate(&stream));
 
   std::ifstream in_0_is;
-  in_0_is.open("in_0.bin");
+  in_0_is.open("/data/guoran/data/64_m_data/in_0.bin");
   in_0_is.read(reinterpret_cast<char *>(host_in_0_ptr), in_0_size);
   CudaCheck(cudaMemcpy(in_0_ptr, host_in_0_ptr, in_0_size, cudaMemcpyDefault));
 
   std::ifstream in_1_is;
-  in_1_is.open("in_1.bin");
+  in_1_is.open("/data/guoran/data/64_m_data/in_1.bin");
   in_1_is.read(reinterpret_cast<char *>(host_in_1_ptr), in_1_size);
   CudaCheck(cudaMemcpy(in_1_ptr, host_in_1_ptr, in_1_size, cudaMemcpyDefault));
 
   const int pack_size = 4;
   const int TILE_DIM = 16;
-  const int M_BLOCKS = 2;
+  const int M_BLOCKS = 4; // 64/16
   const int K_BLOCKS = 8;
   const int skew_half = 8;
   const int skew_acc = 8;
-  const int concated_padded_dim = 32;
   const int in_shared_mem_num_cols = vector_size + skew_half;
   const int acc_shared_mem_num_cols = concated_padded_dim + skew_acc;
   const size_t in_shared_mem_bytes =
@@ -222,11 +198,11 @@ int main() {
   const size_t acc_shared_mem_bytes =
       concated_padded_dim * acc_shared_mem_num_cols * sizeof(float);
   const size_t warp_shared_mem_bytes =
-      std::max(in_shared_mem_bytes, acc_shared_mem_bytes);
+      in_shared_mem_bytes + acc_shared_mem_bytes;
   const int block_size = 128;
   const int block_dim_x = 32;
   const int block_dim_y = block_size / block_dim_x;
-  const int num_blocks = batch_size / block_dim_y;
+  const int num_blocks = batch_size;
 
   const int out_num_cols_num_pack = out_num_cols / pack_size;
   const int vector_num_pack = vector_size / pack_size;
@@ -242,20 +218,29 @@ int main() {
   param.dim_start_offset[1] = feature_dims.at(0);
   param.num_in = 2;
   param.out = out_ptr;
-  param.features_dim = 27;
+  param.features_dim = feature_dims.at(0) + feature_dims.at(1);
   param.output_concat = in_0_ptr;
 
+  int max_active_blocks;
+  {
+    CudaCheck(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_active_blocks,
+        DotFeatureInteractionHalf<2, 4, TILE_DIM, M_BLOCKS, K_BLOCKS>,
+        block_size, warp_shared_mem_bytes));
+  }
+  std::cout << "max_active_blocks " << max_active_blocks << std::endl;
+
   DotFeatureInteractionHalf<2, 4, TILE_DIM, M_BLOCKS, K_BLOCKS>
-      <<<num_blocks, dim3(block_dim_x, block_dim_y),
-         block_dim_y * warp_shared_mem_bytes, stream>>>(
-          batch_size, concated_padded_dim, vector_num_pack, out_num_cols,
-          out_num_cols_num_pack, in_shared_mem_num_cols,
-          in_shared_mem_cols_num_pack, acc_shared_mem_num_cols,
-          acc_shared_mem_cols_num_pack, warp_shared_mem_bytes, 0, 1, param);
+      <<<num_blocks, dim3(block_dim_x, block_dim_y), warp_shared_mem_bytes,
+         stream>>>(batch_size, concated_padded_dim, vector_num_pack,
+                   out_num_cols, out_num_cols_num_pack, in_shared_mem_num_cols,
+                   in_shared_mem_cols_num_pack, acc_shared_mem_num_cols,
+                   acc_shared_mem_cols_num_pack, warp_shared_mem_bytes, 0,
+                   out_padding, param);
   CudaCheck(cudaMemcpy(host_out_ptr, out_ptr, out_size, cudaMemcpyDefault));
 
   std::ifstream out_is;
-  out_is.open("out.bin");
+  out_is.open("/data/guoran/data/64_m_data/out.bin");
   std::vector<half> out_data(batch_size * out_dim);
   out_is.read(reinterpret_cast<char *>(out_data.data()), out_size);
 
