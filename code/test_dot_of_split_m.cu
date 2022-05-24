@@ -52,10 +52,6 @@ __global__ void DotFeatureInteractionHalf(
   const int output_concat_size = 128;
   const half *batch_output_concat =
       param.output_concat + batch_idx * output_concat_size;
-  Pack<half, pack_size> zero;
-  for (int k = 0; k < 4; ++k) {
-    zero.elem[k] = 0;
-  }
   for (int col = threadIdx.x; col < vector_num_pack; col += blockDim.x) {
 #pragma unroll
     for (int i = 0; i < N; ++i) {
@@ -80,40 +76,40 @@ __global__ void DotFeatureInteractionHalf(
       }
     }
   }
-  __syncthreads(); // if no this thread sync, error result
-  int i = warp_id / M_BLOCKS;
-  int j = warp_id % M_BLOCKS;
-  if (i >= j) {
-    // 2. load to tensor core
-    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, TILE_DIM, TILE_DIM,
-                           TILE_DIM, float>
-        acc;
-    nvcuda::wmma::fill_fragment(acc, 0.0f);
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, TILE_DIM, TILE_DIM, TILE_DIM,
-                           half, nvcuda::wmma::row_major>
-        a;
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, TILE_DIM, TILE_DIM, TILE_DIM,
-                           half, nvcuda::wmma::col_major>
-        b;
-
-    for (int step = 0; step < K_BLOCKS; ++step) {
-      half *tile_a_ptr =
-          buf + i * TILE_DIM * in_shared_mem_cols + step * TILE_DIM;
-      half *tile_b_ptr =
-          buf + j * TILE_DIM * in_shared_mem_cols + step * TILE_DIM;
-      nvcuda::wmma::load_matrix_sync(a, tile_a_ptr, in_shared_mem_cols);
-      nvcuda::wmma::load_matrix_sync(b, tile_b_ptr, in_shared_mem_cols);
-      nvcuda::wmma::mma_sync(acc, a, b, acc);
+  __syncthreads(); 
+  for (int blocks_id = warp_id; blocks_id < M_BLOCKS * M_BLOCKS;
+       blocks_id += blockDim.y) {
+    int blocks_row_id = blocks_id / M_BLOCKS;
+    int blocks_col_id = blocks_id % M_BLOCKS;
+    if (blocks_row_id >= blocks_col_id) {
+      nvcuda::wmma::fragment<nvcuda::wmma::accumulator, TILE_DIM, TILE_DIM,
+                             TILE_DIM, float>
+          acc;
+      nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, TILE_DIM, TILE_DIM,
+                             TILE_DIM, half, nvcuda::wmma::row_major>
+          a;
+      nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, TILE_DIM, TILE_DIM,
+                             TILE_DIM, half, nvcuda::wmma::col_major>
+          b;
+      nvcuda::wmma::fill_fragment(acc, 0.0f);
+      for (int step = 0; step < K_BLOCKS; ++step) {
+        half *tile_a_ptr = buf + blocks_row_id * TILE_DIM * in_shared_mem_cols +
+                           step * TILE_DIM;
+        half *tile_b_ptr = buf + blocks_col_id * TILE_DIM * in_shared_mem_cols +
+                           step * TILE_DIM;
+        nvcuda::wmma::load_matrix_sync(a, tile_a_ptr, in_shared_mem_cols);
+        nvcuda::wmma::load_matrix_sync(b, tile_b_ptr, in_shared_mem_cols);
+        nvcuda::wmma::mma_sync(acc, a, b, acc);
+      }
+      float *tile_ptr = acc_buf +
+                        blocks_row_id * TILE_DIM * acc_shared_mem_cols +
+                        blocks_col_id * TILE_DIM;
+      nvcuda::wmma::store_matrix_sync(tile_ptr, acc, acc_shared_mem_cols,
+                                      nvcuda::wmma::mem_row_major);
     }
-    float *tile_ptr =
-        acc_buf + i * TILE_DIM * acc_shared_mem_cols + j * TILE_DIM;
-    nvcuda::wmma::store_matrix_sync(tile_ptr, acc, acc_shared_mem_cols,
-                                    nvcuda::wmma::mem_row_major);
   }
   __syncthreads();
-  int thread_id = threadIdx.y * blockDim.x + threadIdx.x;
   half *emb_out = reinterpret_cast<half *>(batch_out_pack + vector_num_pack);
-
   for (int base_row = threadIdx.y * unroll_dim; base_row < param.features_dim;
        base_row += unroll_dim * blockDim.y) {
 #pragma unroll
@@ -130,6 +126,7 @@ __global__ void DotFeatureInteractionHalf(
       }
     }
   }
+  int thread_id = threadIdx.y * blockDim.x + threadIdx.x;
   for (int i = thread_id; i < output_concat_size;
        i += blockDim.x * blockDim.y) {
     batch_out[i] = batch_output_concat[i];
