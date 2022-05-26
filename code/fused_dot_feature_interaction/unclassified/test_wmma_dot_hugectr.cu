@@ -209,9 +209,9 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__
 
   for (int i = 0; i < M_BLOCKS; i++) {
     for (int j = 0; j < M_BLOCKS; j++) {
-      // if (i < j) {
-      //  continue;
-      //}
+       if (i < j) {
+        continue;
+      }
       nvcuda::wmma::fill_fragment(acc[i][j], 0);
     }
   }
@@ -231,9 +231,9 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__
     }
     for (int i = 0; i < M_BLOCKS; i++) {
       for (int j = 0; j < M_BLOCKS; j++) {
-        // if (i < j) {
-        //  continue;
-        //}
+         if (i < j) {
+          continue;
+        }
         nvcuda::wmma::mma_sync(acc[i][j], a[i], b[j], acc[i][j]);
       }
     }
@@ -241,9 +241,9 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__
   float *shmem_store = reinterpret_cast<float *>(shmem);
   for (int i = 0; i < M_BLOCKS; i++) {
     for (int j = 0; j < M_BLOCKS; j++) {
-      // if (i < j) {
-      //    continue;
-      // }
+      if (i < j) {
+         continue;
+      }
       float *tile_ptr = shmem_store + (i * 16 * SMEM_STRIDE_ACC + j * 16);
       nvcuda::wmma::store_matrix_sync(tile_ptr, acc[i][j], SMEM_STRIDE_ACC,
                                       nvcuda::wmma::mem_row_major);
@@ -354,7 +354,7 @@ inline void dotBasedInteractFwd(const void *bottom_mlp_input,
 
 int main() {
   using T = half; // int
-  int64_t batch_size = 55296 / 8;
+  int64_t batch_size = 55296;
   int64_t vector_size = 128;
   std::vector<int64_t> feature_dims = {1, 26};
   T *host_in_0_ptr;
