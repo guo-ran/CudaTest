@@ -24,7 +24,7 @@ template <> struct DefaultComputeType<half> { using type = float; };
 template <> struct DefaultComputeType<__nv_bfloat16> { using type = float; };
 
 template <typename T, int32_t N> struct DotBwdParam {
-  const T *dy;
+  const T *out_grad;
   const T *in[N];
   T *in_grad[N];
   T *output_concat_grad;
@@ -35,193 +35,195 @@ template <typename T, int32_t N> struct DotBwdParam {
   int32_t num_in;
 };
 
-template <typename T> struct DefaultPrecision { using type = T; };
 
-#if __CUDA_ARCH__ >= 800
-template <> struct DefaultPrecision<float> {
-  using type = nvcuda::wmma::precision::tf32;
+template<typename T, typename AccType, int m, int n, int k, class ALayout, class BLayout>
+class Wmma {
+ public:
+  __device__ void LoadA(const T* ptr, int ldm) { nvcuda::wmma::load_matrix_sync(a_, ptr, ldm); }
+  __device__ void LoadB(const T* ptr, int ldm) { nvcuda::wmma::load_matrix_sync(b_, ptr, ldm); }
+  __device__ void Store(AccType* ptr, int ldm) {
+    nvcuda::wmma::store_matrix_sync(ptr, acc_, ldm, nvcuda::wmma::mem_row_major);
+  }
+  __device__ void Mma() { nvcuda::wmma::mma_sync(acc_, a_, b_, acc_); }
+  __device__ void InitAcc() { nvcuda::wmma::fill_fragment(acc_, 0.0f); }
+  __device__ __forceinline__ T Convert(T src) { return src; }
+
+ private:
+  nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, m, n, k, T, ALayout> a_;
+  nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, m, n, k, T, BLayout> b_;
+  nvcuda::wmma::fragment<nvcuda::wmma::accumulator, m, n, k, AccType> acc_;
 };
-#endif
 
-template <typename T> __device__ T ConvertToPrecision(T src) { return src; }
-
+template<typename AccType, int m, int n, int k, class ALayout, class BLayout>
+class Wmma<float, AccType, m, n, k, ALayout, BLayout> {
+ public:
 #if __CUDA_ARCH__ >= 800
-template <> __device__ float ConvertToPrecision<float>(float src) {
-  return nvcuda::wmma::__float_to_tf32(src);
-}
+  __device__ void LoadA(const float* ptr, int ldm) { nvcuda::wmma::load_matrix_sync(a_, ptr, ldm); }
+  __device__ void LoadB(const float* ptr, int ldm) { nvcuda::wmma::load_matrix_sync(b_, ptr, ldm); }
+  __device__ void Mma() { nvcuda::wmma::mma_sync(acc_, a_, b_, acc_); }
+  __device__ __forceinline__ float Convert(float src) { return nvcuda::wmma::__float_to_tf32(src); }
+  __device__ void Store(AccType* ptr, int ldm) {
+    nvcuda::wmma::store_matrix_sync(ptr, acc_, ldm, nvcuda::wmma::mem_row_major);
+  }
+  __device__ void InitAcc() { nvcuda::wmma::fill_fragment(acc_, 0.0f); }
+#else
+  __device__ void LoadA(const float* ptr, int ldm) { __trap(); }
+  __device__ void LoadB(const float* ptr, int ldm) { __trap(); }
+  __device__ void Mma() { __trap(); }
+  __device__ __forceinline__ float Convert(float src) { return src; }
+  __device__ void Store(AccType* ptr, int ldm) { __trap(); }
+  __device__ void InitAcc() { __trap(); }
 #endif
 
-constexpr int unroll_dim = 2;
+ private:
+#if __CUDA_ARCH__ >= 800
+  nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, m, n, k, nvcuda::wmma::precision::tf32, ALayout>
+      a_;
+  nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, m, n, k, nvcuda::wmma::precision::tf32, BLayout>
+      b_;
+  nvcuda::wmma::fragment<nvcuda::wmma::accumulator, m, n, k, AccType> acc_;
+#endif
+};
 
-template <typename T, typename ComputeType, int32_t N, int32_t pack_size,
-          int tile_dim, int k_tile_dim>
-__global__ void DotFeatureInteractionBackwardTensorCore(
-    int m_num_tiles, int n_num_tiles, int k_num_tiles, int64_t batch_size,
-    int padded_num_rows, int vector_num_pack, int padded_vector_num_pack,
-    int out_num_cols, int in_shared_mem_cols, int in_shared_mem_cols_num_pack,
-    int matrix_dy_shared_mem_cols, int offset, DotBwdParam<T, N> param) {
-  using PrecisionType = typename DefaultPrecision<T>::type;
+constexpr int kUnrollDim = 2;
+
+template<typename T, typename ComputeType, int32_t max_in, int32_t pack_size, int mn_tile_dim,
+         int k_tile_dim>
+__global__ void DotFeatureInteractionBackwardWmmaImpl(
+    int m_num_tiles, int n_num_tiles, int k_num_tiles, int64_t batch_size, int padded_num_rows,
+    int vector_num_pack, int padded_vector_num_pack, int out_num_cols, int in_shared_mem_cols,
+    int in_shared_mem_cols_num_pack, int matrix_out_grad_shared_mem_cols, int offset,
+    DotBwdParam<T, max_in> param) {
+#if __CUDA_ARCH__ >= 700
+  Wmma<T, ComputeType, mn_tile_dim, mn_tile_dim, k_tile_dim, nvcuda::wmma::row_major,
+       nvcuda::wmma::row_major>
+      wmma;
   extern __shared__ __align__(sizeof(double)) unsigned char shared_buf[];
   int warp_id = threadIdx.y;
-  T *in_buf = reinterpret_cast<T *>(shared_buf);
-  Pack<T, pack_size> *in_buf_pack =
-      reinterpret_cast<Pack<T, pack_size> *>(shared_buf);
-  T *matrix_dy_buf = in_buf + padded_num_rows * in_shared_mem_cols;
-  ComputeType *in_grad_buf = reinterpret_cast<ComputeType *>(
-      matrix_dy_buf + padded_num_rows * matrix_dy_shared_mem_cols);
-  Pack<ComputeType, pack_size> *in_grad_buf_pack =
-      reinterpret_cast<Pack<ComputeType, pack_size> *>(in_grad_buf);
+  T* in_buf = reinterpret_cast<T*>(shared_buf);
+  Pack<T, pack_size>* in_buf_pack = reinterpret_cast<Pack<T, pack_size>*>(shared_buf);
+  T* matrix_out_grad_buf = in_buf + padded_num_rows * in_shared_mem_cols;
+  ComputeType* in_grad_buf = reinterpret_cast<ComputeType*>(
+      matrix_out_grad_buf + padded_num_rows * matrix_out_grad_shared_mem_cols);
+  Pack<ComputeType, pack_size>* in_grad_buf_pack =
+      reinterpret_cast<Pack<ComputeType, pack_size>*>(in_grad_buf);
 
   int batch_idx = blockIdx.x;
-  const T *batch_dy = param.dy + batch_idx * out_num_cols;
+  const T* batch_out_grad = param.out_grad + batch_idx * out_num_cols;
   const int output_concat_size = param.output_concat_size;
-  T *batch_output_concat_grad =
-      (param.output_concat_grad)
-          ? (param.output_concat_grad + batch_idx * output_concat_size)
-          : nullptr;
+  T* batch_output_concat_grad = (param.output_concat_grad)
+                                    ? (param.output_concat_grad + batch_idx * output_concat_size)
+                                    : nullptr;
   int features_dim = param.features_dim;
-  // 1.split dy to concat_out_grad and matrix_dy buf
+  // 1.split out_grad to concat_out_grad and matrix_out_grad buf
   int thread_id = threadIdx.x + threadIdx.y * blockDim.x;
-  for (int i = thread_id; i < output_concat_size;
-       i += blockDim.x * blockDim.y) {
-    batch_output_concat_grad[i] = batch_dy[i];
+  for (int i = thread_id; i < output_concat_size; i += blockDim.x * blockDim.y) {
+    batch_output_concat_grad[i] = batch_out_grad[i];
   }
-  const T *batch_interaction_dy = batch_dy + output_concat_size;
-  for (int matrix_row = threadIdx.y; matrix_row < padded_num_rows;
-       matrix_row += blockDim.y) {
-    for (int matrix_col = threadIdx.x; matrix_col < padded_num_rows;
-         matrix_col += blockDim.x) {
-      const int64_t i = matrix_row * matrix_dy_shared_mem_cols + matrix_col;
+  const T* batch_interaction_out_grad = batch_out_grad + output_concat_size;
+  for (int matrix_row = threadIdx.y; matrix_row < padded_num_rows; matrix_row += blockDim.y) {
+    for (int matrix_col = threadIdx.x; matrix_col < padded_num_rows; matrix_col += blockDim.x) {
+      const int64_t i = matrix_row * matrix_out_grad_shared_mem_cols + matrix_col;
       T grad_val = 0;
       if (matrix_row < features_dim && matrix_col < features_dim) {
         if (matrix_col < matrix_row) {
-          int32_t dy_col_idx =
-              matrix_row * (offset + matrix_row - 1 + offset) / 2 + matrix_col;
-          grad_val = batch_interaction_dy[dy_col_idx];
+          int32_t out_grad_col = matrix_row * (offset + matrix_row - 1 + offset) / 2 + matrix_col;
+          grad_val = batch_interaction_out_grad[out_grad_col];
         } else if (matrix_row < matrix_col) {
           // transpose add
           int32_t trans_row_id = matrix_col;
           int32_t trans_col_id = matrix_row;
-          int32_t dy_col_idx =
-              trans_row_id * (offset + trans_row_id - 1 + offset) / 2 +
-              trans_col_id;
-          grad_val = batch_interaction_dy[dy_col_idx];
+          int32_t out_grad_col =
+              trans_row_id * (offset + trans_row_id - 1 + offset) / 2 + trans_col_id;
+          grad_val = batch_interaction_out_grad[out_grad_col];
         } else if ((matrix_row == matrix_col) && (offset == 1)) {
-          int32_t dy_col_idx =
-              matrix_row * (offset + matrix_row - 1 + offset) / 2 + matrix_col;
-          grad_val = batch_interaction_dy[dy_col_idx] * static_cast<T>(2);
+          int32_t out_grad_col = matrix_row * (offset + matrix_row - 1 + offset) / 2 + matrix_col;
+          grad_val = batch_interaction_out_grad[out_grad_col] * static_cast<T>(2);
         }
       }
-      matrix_dy_buf[i] = ConvertToPrecision<T>(grad_val);
+      matrix_out_grad_buf[i] = wmma.Convert(grad_val);
     }
   }
 
   // 2.load in to in in_buf
   for (int col = threadIdx.x; col < vector_num_pack; col += blockDim.x) {
 #pragma unroll
-    for (int i = 0; i < N; ++i) {
-      if (i >= param.num_in) {
-        break;
-      }
-      const Pack<T, pack_size> *batch_in =
-          reinterpret_cast<const Pack<T, pack_size> *>(param.in[i]) +
-          batch_idx * param.in_feature_dim[i] * vector_num_pack;
-      for (int j = threadIdx.y * unroll_dim; j < param.in_feature_dim[i];
-           j += blockDim.y * unroll_dim) {
+    for (int i = 0; i < max_in; ++i) {
+      if (i >= param.num_in) { break; }
+      const Pack<T, pack_size>* batch_in = reinterpret_cast<const Pack<T, pack_size>*>(param.in[i])
+                                           + batch_idx * param.in_feature_dim[i] * vector_num_pack;
+      for (int j = threadIdx.y * kUnrollDim; j < param.in_feature_dim[i];
+           j += blockDim.y * kUnrollDim) {
 #pragma unroll
-        for (int k = 0; k < unroll_dim; ++k) {
+        for (int k = 0; k < kUnrollDim; ++k) {
           int in_row = j + k;
-          if (in_row >= param.in_feature_dim[i]) {
-            break;
-          }
+          if (in_row >= param.in_feature_dim[i]) { break; }
           int buf_row = param.dim_start_offset[i] + in_row;
-          Pack<T, pack_size> pack_in_val =
-              batch_in[in_row * vector_num_pack + col];
+          Pack<T, pack_size> pack_in_val = batch_in[in_row * vector_num_pack + col];
+#pragma unroll
           for (int t = 0; t < pack_size; ++t) {
-            pack_in_val.elem[t] = ConvertToPrecision<T>(pack_in_val.elem[t]);
+            pack_in_val.elem[t] = wmma.Convert(pack_in_val.elem[t]);
           }
-          in_buf_pack[buf_row * in_shared_mem_cols_num_pack + col] =
-              pack_in_val;
+          in_buf_pack[buf_row * in_shared_mem_cols_num_pack + col] = pack_in_val;
         }
       }
     }
   }
   Pack<T, pack_size> zero;
-  for (int k = 0; k < pack_size; ++k) {
-    zero.elem[k] = ConvertToPrecision<T>(0);
-  }
 #pragma unroll
-  for (int row = features_dim + threadIdx.y; row < padded_num_rows;
-       row += blockDim.y) {
-    for (int col = threadIdx.x; col < padded_vector_num_pack;
-         col += blockDim.x) {
+  for (int k = 0; k < pack_size; ++k) { zero.elem[k] = wmma.Convert(0); }
+#pragma unroll
+  for (int row = features_dim + threadIdx.y; row < padded_num_rows; row += blockDim.y) {
+    for (int col = threadIdx.x; col < padded_vector_num_pack; col += blockDim.x) {
       in_buf_pack[row * in_shared_mem_cols_num_pack + col] = zero;
     }
   }
   for (int row = threadIdx.y; row < features_dim; row += blockDim.y) {
-    for (int col = vector_num_pack + threadIdx.x; col < padded_vector_num_pack;
-         col += blockDim.x) {
+    for (int col = vector_num_pack + threadIdx.x; col < padded_vector_num_pack; col += blockDim.x) {
       in_buf_pack[row * in_shared_mem_cols_num_pack + col] = zero;
     }
   }
   __syncthreads();
 
-  for (int blocks_id = warp_id; blocks_id < m_num_tiles * n_num_tiles;
-       blocks_id += blockDim.y) {
-    int blocks_row_id = blocks_id / n_num_tiles;
-    int blocks_col_id = blocks_id - blocks_row_id * n_num_tiles;
-    nvcuda::wmma::fragment<nvcuda::wmma::accumulator, tile_dim, tile_dim,
-                           k_tile_dim, ComputeType>
-        acc;
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, tile_dim, tile_dim,
-                           k_tile_dim, PrecisionType, nvcuda::wmma::row_major>
-        a;
-    nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, tile_dim, tile_dim,
-                           k_tile_dim, PrecisionType, nvcuda::wmma::row_major>
-        b;
-    nvcuda::wmma::fill_fragment(acc, 0.0f);
+  for (int blocks_id = warp_id; blocks_id < m_num_tiles * n_num_tiles; blocks_id += blockDim.y) {
+    int blocks_row = blocks_id / n_num_tiles;
+    int blocks_col = blocks_id - blocks_row * n_num_tiles;
+    wmma.InitAcc();
     for (int step = 0; step < k_num_tiles; ++step) {
-      // blocks_row_id is a row_id, step is a col_id. blocks_col_id is b col_id,
+      // blocks_row is a row_id, step is a col_id. blocks_col is b col_id,
       // step is b row_id.
-      T *tile_a_ptr = matrix_dy_buf +
-                      blocks_row_id * tile_dim * matrix_dy_shared_mem_cols +
-                      step * k_tile_dim;
-      T *tile_b_ptr = in_buf + step * k_tile_dim * in_shared_mem_cols +
-                      blocks_col_id * tile_dim;
-      nvcuda::wmma::load_matrix_sync(a, tile_a_ptr, matrix_dy_shared_mem_cols);
-      nvcuda::wmma::load_matrix_sync(b, tile_b_ptr, in_shared_mem_cols);
-      nvcuda::wmma::mma_sync(acc, a, b, acc);
+      T* tile_a_ptr = matrix_out_grad_buf
+                      + blocks_row * mn_tile_dim * matrix_out_grad_shared_mem_cols
+                      + step * k_tile_dim;
+      T* tile_b_ptr = in_buf + step * k_tile_dim * in_shared_mem_cols + blocks_col * mn_tile_dim;
+      wmma.LoadA(tile_a_ptr, matrix_out_grad_shared_mem_cols);
+      wmma.LoadB(tile_b_ptr, in_shared_mem_cols);
+      wmma.Mma();
     }
-    ComputeType *tile_ptr = in_grad_buf +
-                            blocks_row_id * tile_dim * in_shared_mem_cols +
-                            blocks_col_id * tile_dim;
-    nvcuda::wmma::store_matrix_sync(tile_ptr, acc, in_shared_mem_cols,
-                                    nvcuda::wmma::mem_row_major);
+    ComputeType* tile_ptr =
+        in_grad_buf + blocks_row * mn_tile_dim * in_shared_mem_cols + blocks_col * mn_tile_dim;
+    wmma.Store(tile_ptr, in_shared_mem_cols);
   }
   __syncthreads();
 
   // 4.split in_grad buf to dx
   for (int col = threadIdx.x; col < vector_num_pack; col += blockDim.x) {
 #pragma unroll
-    for (int i = 0; i < N; ++i) {
-      if (i >= param.num_in) {
-        break;
-      }
-      Pack<T, pack_size> *batch_in_grad =
-          reinterpret_cast<Pack<T, pack_size> *>(param.in_grad[i]) +
-          batch_idx * param.in_feature_dim[i] * vector_num_pack;
-      for (int j = threadIdx.y * unroll_dim; j < param.in_feature_dim[i];
-           j += blockDim.y * unroll_dim) {
+    for (int i = 0; i < max_in; ++i) {
+      if (i >= param.num_in) { break; }
+      Pack<T, pack_size>* batch_in_grad = reinterpret_cast<Pack<T, pack_size>*>(param.in_grad[i])
+                                          + batch_idx * param.in_feature_dim[i] * vector_num_pack;
+      for (int j = threadIdx.y * kUnrollDim; j < param.in_feature_dim[i];
+           j += blockDim.y * kUnrollDim) {
 #pragma unroll
-        for (int k = 0; k < unroll_dim; ++k) {
+        for (int k = 0; k < kUnrollDim; ++k) {
           int in_row = j + k;
-          if (in_row >= param.in_feature_dim[i]) {
-            break;
-          }
+          if (in_row >= param.in_feature_dim[i]) { break; }
           int buf_row = param.dim_start_offset[i] + in_row;
           Pack<T, pack_size> grad_val;
           Pack<ComputeType, pack_size> buf_grad_val =
               in_grad_buf_pack[buf_row * in_shared_mem_cols_num_pack + col];
+#pragma unroll
           for (int t = 0; t < pack_size; ++t) {
             grad_val.elem[t] = static_cast<T>(buf_grad_val.elem[t]);
           }
@@ -230,7 +232,11 @@ __global__ void DotFeatureInteractionBackwardTensorCore(
       }
     }
   }
+#else
+  __trap();
+#endif  // __CUDA_ARCH__ >= 700
 }
+
 
 template <typename T> struct KTileDim { static const int val = 16; };
 
@@ -295,7 +301,7 @@ int main() {
   param.dim_start_offset[0] = 0;
   param.dim_start_offset[1] = feature_dims.at(0);
   param.num_in = 2;
-  param.dy = dy_ptr;
+  param.out_grad = dy_ptr;
   param.features_dim = features_dim;
   param.output_concat_grad = output_concat_grad_ptr;
   param.output_concat_size = vector_size;
@@ -333,7 +339,7 @@ int main() {
   const int vector_num_pack = vector_size / pack_size;
   const int in_shared_mem_cols_num_pack = in_shared_mem_num_cols / pack_size;
 
-  DotFeatureInteractionBackwardTensorCore<T, ComputeType, 2, 4, TILE_DIM,
+  DotFeatureInteractionBackwardWmmaImpl<T, ComputeType, 2, 4, TILE_DIM,
                                           K_TILE_DIM>
       <<<num_num_tiles, dim3(block_dim_x, block_dim_y), warp_shared_mem_bytes,
          stream>>>(m_num_tiles, n_num_tiles, k_num_tiles, batch_size,
