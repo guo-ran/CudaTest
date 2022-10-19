@@ -1,7 +1,9 @@
 /*
 
-/usr/local/cuda-11.4/bin/nvcc test_nccl.cu -I/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/include/ -L/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/ -lnccl 
-export LD_LIBRARY_PATH=/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/
+/usr/local/cuda-11.4/bin/nvcc test_nccl.cu -I
+/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/include/ -L
+/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/ -lnccl export
+LD_LIBRARY_PATH=/usr/local/nccl_2.10.3-1+cuda11.4_x86_64/lib/
 
 /usr/local/cuda-11.4/bin/nvcc test_nccl.cu -I
 /usr/local/nccl_2.10.3-1+cuda11.4_x86_64/include/ -L
@@ -30,7 +32,6 @@ int main() {
   std::vector<half *> half_buffers(n_gpu);
   std::vector<float *> float_buffers(n_gpu);
   std::vector<ncclComm_t> comms(n_gpu);
-  std::cout<<"ncclComm_t size"<<sizeof(ncclComm_t);
   for (int i = 0; i < n_gpu; ++i) {
     Check(cudaSetDevice(i));
     Check(cudaStreamCreate(&streams.at(i)));

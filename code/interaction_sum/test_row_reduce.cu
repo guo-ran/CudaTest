@@ -433,8 +433,8 @@ int GetNumBlocks(const int64_t num_instances,
 }
 
 int main() {
-  using T = half; // int
-  int64_t batch_size = 55296 / 8;
+  using T = float; // int
+  int64_t batch_size = 55296 / 4;
   int64_t vector_size = 16;
   int64_t feature_dim = 39;
 
@@ -449,7 +449,7 @@ int main() {
   CudaCheck(cudaMalloc(&out_ptr, elem_cnt * sizeof(T)));
   FillValue<<<elem_cnt / 1024, 1024, 0, stream>>>(elem_cnt, static_cast<T>(4),
                                                   in_ptr);
-
+/*
   { // forward hugectr
     dim3 blockSize(vector_size, 1, 1);
     dim3 grdiSize(batch_size, 1, 1);
@@ -485,6 +485,7 @@ int main() {
     FeatureInteractionSum<T, 1>
         <<<num_blocks, block_dims, 0, stream>>>(batch_size, vector_size, param);
   }
+ */
   { // backward hugectr
     dim3 blockSize(vector_size, 1, 1);
     dim3 gridSize(batch_size, 1, 1);

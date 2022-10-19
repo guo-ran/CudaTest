@@ -44,11 +44,11 @@ struct AffineStore {
 #pragma unroll
     for (int i = 0; i < N; ++i) {
       DST normalized_i = static_cast<DST>(src[i]);
-      if (do_scale || do_center) {
+      //if (do_scale || do_center) {
         y_pack.elem[i] = normalized_i * gamma_pack.elem[i] + beta_pack.elem[i];
-      } else {
-        y_pack.elem[i] = normalized_i;
-      }
+      //} else {
+      //  y_pack.elem[i] = normalized_i;
+      //}
     }
     *reinterpret_cast<cuda::layer_norm::PackType<DST, N> *>(y + offset) =
         y_pack.storage;

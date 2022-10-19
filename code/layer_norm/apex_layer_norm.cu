@@ -741,9 +741,9 @@ void backward(int num_instances, int norm_size) {
 int main(int argc, char **argv) {
   int num_instances = atoi(argv[1]);
   int norm_size = atoi(argv[2]);
-  forward<float, float>(num_instances, norm_size);
-  forward<half, float>(num_instances, norm_size);
-  backward<float, float>(num_instances, norm_size);
+  //forward<float, float>(num_instances, norm_size);
+  //forward<half, float>(num_instances, norm_size);
+  //backward<float, float>(num_instances, norm_size);
   backward<half, float>(num_instances, norm_size);
   return 0;
 }
